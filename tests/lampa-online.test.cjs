@@ -18,6 +18,17 @@ function harness(options = {}) {
     const storage = options.storage || {};
     const listeners = [];
     let focus = null, collection = [], backward = 0, screen;
+    const paramValues = {}, paramDefaults = {};
+    // Lampa Params.select/update and input edit contract, without a live UI:
+    // https://github.com/yumata/lampa-source/blob/master/src/interaction/settings/params.js
+    const Params = {
+        select(name, values, fallback) { paramValues[name] = values; paramDefaults[name] = fallback; },
+        update(name) {
+            const key = Lampa.Storage.get(name, paramDefaults[name] + '');
+            return typeof paramValues[name] === 'string' ? key : paramValues[name][key] || paramValues[name][paramDefaults[name]];
+        },
+        edit(name, value) { Lampa.Storage.set(name, value); return this.update(name); }
+    };
 
     class Element {
         constructor(html = '') { this.html = html; this.children = []; this.events = {}; this.parent = null; this.value = ''; }
@@ -69,7 +80,15 @@ function harness(options = {}) {
         Template: { add() {}, get() { return new Element('style'); } },
         Component: { get(name) { return components[name]; }, add(name, value) { assert.equal(components[name], undefined); components[name] = value; } },
         Manifest: {},
-        SettingsApi: { addComponent(value) { settingComponents.push(value); }, addParam(value) { settings.push(value); } },
+        SettingsApi: {
+            addComponent(value) { settingComponents.push(value); },
+            addParam(value) {
+                settings.push(value);
+                if (value.param.type === 'input' || value.param.type === 'select') {
+                    Params.select(value.param.name, value.param.values, value.param.default);
+                }
+            }
+        },
         Noty: { show(value) { notices.push(value); } },
         Activity: {
             push(value) { pushes.push(value); },
@@ -134,7 +153,7 @@ function harness(options = {}) {
     });
     context.window = context;
     const env = {
-        Lampa, context, requests, logs, notices, storage, settings, settingComponents, components, scrolls, listeners, manifests, unrelatedPlugin, moves, pushes, timers,
+        Lampa, context, requests, logs, notices, storage, settings, Params, settingComponents, components, scrolls, listeners, manifests, unrelatedPlugin, moves, pushes, timers,
         get focus() { return focus; }, get collection() { return collection; }, get backward() { return backward; },
         get rows() { return flatten(scrolls.at(-1).root).filter(el => /\bselector\b/.test(el.html)); },
         get text() { return text(scrolls.at(-1).root); },
@@ -151,7 +170,9 @@ function harness(options = {}) {
             screen.create(); screen.start();
             return screen;
         },
-        response(data, request = requests.at(-1)) { request.params.success(typeof data === 'string' ? data : JSON.stringify(data)); },
+        response(data, request = requests.at(-1), status = 200) {
+            request.params.success(typeof data === 'string' ? data : JSON.stringify(data), 'success', { status });
+        },
         error(status, kind = 'error', request = requests.at(-1)) { request.params.error({ status, responseText: 'PRIVATE_RESPONSE', message: 'PRIVATE_MESSAGE' }, kind); },
         enter(index) { const el = env.rows[index]; assert.ok(el, 'row exists: ' + index); Lampa.Controller.collectionFocus(el, scrolls.at(-1).root); el.trigger('hover:enter'); },
         back() { active.back(); },
@@ -187,7 +208,7 @@ test('ready listener and all registrations are unique across reloads', () => {
     assert.equal(Object.keys(env.components).length, 1);
     assert.equal(env.manifests.length, 2);
     assert.equal(env.manifests[0], env.unrelatedPlugin);
-    assert.equal(env.manifests[1].version, '0.1.1');
+    assert.equal(env.manifests[1].version, '0.1.2');
     assert.equal(env.settingComponents.length, 1);
     assert.equal(env.settings.length, 4);
 });
@@ -230,6 +251,12 @@ test('API URL encodes query, token and persistent device ID; proxy is opt-in', (
     assert.equal(url.searchParams.get('story'), 'Назва & / ? кіно');
     assert.equal(url.searchParams.get('user_dev_token'), 'synthetic &+=?');
     assert.equal(url.searchParams.get('user_dev_id'), 'device & test');
+    for (const [key, value] of Object.entries({ app_lang: 'ru_RU', user_dev_apk: '2.2.13', user_dev_name: 'Lampa', user_dev_os: 'Android', user_dev_vendor: 'Lampa' })) {
+        assert.equal(url.searchParams.get(key), value);
+    }
+    assert.equal(env.requests[1].params.type, 'GET');
+    assert.equal(env.requests[1].params.dataType, 'text');
+    assert.equal(env.requests[1].params.crossDomain, true);
     assert.equal(env.requests[1].params.global, false);
     assert.equal(env.requests[1].params.timeout, 15000);
     screen.destroy();
@@ -246,6 +273,56 @@ test('device ID and settings survive a fresh plugin runtime', () => {
     assert.equal(storage.lampa_online_device_id, id);
     assert.equal(first.settings[0].param.name, 'lampa_online_api_url');
     assert.ok(second.requests[0].params.url.startsWith(storage.lampa_online_api_url));
+});
+
+test('all four text inputs register values and open through Params.update without TypeError', () => {
+    const env = harness();
+    assert.deepEqual(env.settings.map(x => x.param.name), [
+        'lampa_online_api_url', 'lampa_online_token', 'lampa_online_proxy', 'lampa_online_device_id'
+    ]);
+    for (const { param } of env.settings) {
+        assert.equal(param.type, 'input');
+        assert.equal(param.values, '');
+        assert.doesNotThrow(() => env.Params.update(param.name));
+        assert.equal(env.Params.update(param.name), param.default);
+    }
+    // This is the original Lampa failure if input values are not registered.
+    env.Params.select('missing_values', undefined, 'https://filmixapp.cyou/api/v2/');
+    assert.throws(() => env.Params.update('missing_values'), TypeError);
+});
+
+test('settings edits survive reopening and a persisted-storage restart without losing existing values', () => {
+    const storage = {
+        lampa_online_api_url: 'https://existing.example/api/v2/', lampa_online_token: 'existing-token',
+        lampa_online_proxy: 'https://existing-proxy.example/', lampa_online_device_id: '00001234567890123456',
+        unrelated_setting: 'preserved'
+    };
+    const original = { ...storage }, first = harness({ storage });
+    assert.deepEqual(storage, original, 'registration does not overwrite existing settings');
+    for (const { param } of first.settings) assert.equal(first.Params.update(param.name), original[param.name]);
+    const edited = {
+        lampa_online_api_url: 'https://edited.example/api/v2/', lampa_online_token: '00001234&+=?',
+        lampa_online_proxy: 'https://edited-proxy.example/', lampa_online_device_id: '00009999888877776666'
+    };
+    for (const [name, value] of Object.entries(edited)) {
+        assert.equal(first.Params.edit(name, value), value);
+        assert.equal(first.Params.update(name), value, 'reopen uses saved value');
+    }
+    const persisted = JSON.parse(JSON.stringify(storage));
+    const restarted = harness({ storage: persisted });
+    for (const [name, value] of Object.entries(edited)) assert.equal(restarted.Params.update(name), value);
+    assert.equal(persisted.unrelated_setting, 'preserved');
+    restarted.open();
+    const profile = new URL(restarted.requests[0].params.url.slice(edited.lampa_online_proxy.length));
+    assert.equal(profile.origin, 'https://edited.example');
+    assert.equal(profile.searchParams.get('user_dev_token'), edited.lampa_online_token);
+    assert.equal(profile.searchParams.get('user_dev_id'), edited.lampa_online_device_id);
+    const cleared = harness({ storage: persisted });
+    cleared.Params.edit('lampa_online_token', ''); cleared.Params.edit('lampa_online_proxy', '');
+    const guest = harness({ storage: JSON.parse(JSON.stringify(persisted)) }); guest.open();
+    assert.equal(new URL(guest.requests[0].params.url).pathname, '/api/v2/search');
+    assert.equal(guest.Params.update('lampa_online_token'), '');
+    assert.equal(guest.Params.update('lampa_online_proxy'), '');
 });
 
 test('numeric token and device ID preserve leading zeros despite Storage.get coercion', () => {
@@ -418,6 +495,7 @@ for (const [status, kind, expected] of [
     const env = harness(); env.open(); env.error(status, kind);
     assert.equal(env.loading, false); assert.match(env.text, expected);
     assert.ok(!JSON.stringify(env.logs).includes('PRIVATE'));
+    assert.ok(env.logs.some(args => args[0] === `LampaOnline | network | search | complete http=${status} error=${kind} json=unknown filmix=unknown`));
     env.enter(1); assert.equal(env.requests.length, 2);
 });
 
@@ -521,4 +599,88 @@ test('destroy during profile cancels it and never starts search', () => {
     env.response({ user_data: { is_pro_plus: true } }, request);
     assert.equal(env.requests.length, 1);
     assert.ok(!JSON.stringify(env.logs).includes('synthetic-token'));
+});
+
+function networkLines(env, stage) {
+    return env.logs.map(args => args[0]).filter(line => line.startsWith('LampaOnline | network | ' + stage + ' | '));
+}
+
+test('successful search logs start and completion with the actual HTTP status and Filmix shape', () => {
+    const env = harness(); env.open();
+    assert.deepEqual(networkLines(env, 'search'), [
+        'LampaOnline | network | search | start http=0 error=none json=unknown filmix=unknown'
+    ]);
+    env.response([{ id: 12, title: 'Mock film' }], undefined, 201);
+    assert.equal(networkLines(env, 'search')[1], 'LampaOnline | network | search | complete http=201 error=none json=true filmix=true');
+    assert.equal(env.loading, false); assert.equal(env.rows.length, 2);
+});
+
+for (const [body, json, filmix, error] of [
+    ['{broken', false, false, 'parsererror'], ['<html>failure</html>', false, false, 'parsererror'],
+    ['{}', true, false, 'none'], ['null', true, false, 'none'], ['123', true, false, 'none'],
+    ['[1,2]', true, false, 'none'], ['[]', true, true, 'none']
+]) test('diagnostics distinguish JSON parsing from Filmix shape: ' + body, () => {
+    const env = harness(); env.open(); env.response(body);
+    assert.equal(networkLines(env, 'search')[1], `LampaOnline | network | search | complete http=200 error=${error} json=${json} filmix=${filmix}`);
+    assert.equal(env.loading, false);
+});
+
+for (const [status, kind] of [[401, 'error'], [403, 'error'], [404, 'error'], [429, 'error'], [500, 'error'], [0, 'timeout'], [0, 'error'], [200, 'parsererror']]) {
+    test(`profile diagnostics ${status}/${kind} continue as guest and show a clear error`, () => {
+        const env = harness({ storage: { lampa_online_token: 'PRIVATE_TOKEN' } }); env.open();
+        assert.equal(networkLines(env, 'user_profile').length, 1);
+        env.error(status, kind);
+        const json = kind === 'parsererror' ? 'false' : 'unknown';
+        assert.equal(networkLines(env, 'user_profile')[1], `LampaOnline | network | user_profile | complete http=${status} error=${kind} json=${json} filmix=${json}`);
+        assert.match(env.notices.at(-1), /профіль/i);
+        assert.equal(env.requests.length, 2);
+        assert.equal(new URL(env.requests[1].params.url).pathname, '/api/v2/search');
+        assert.ok(!JSON.stringify(env.logs).includes('PRIVATE'));
+    });
+}
+
+for (const profile of [{ unexpected: 'PRIVATE' }, null, []]) test('valid JSON with invalid profile shape safely falls back: ' + JSON.stringify(profile), () => {
+    const env = harness({ storage: { lampa_online_token: 'PRIVATE_TOKEN' } }); env.open(); env.response(profile);
+    assert.equal(networkLines(env, 'user_profile')[1], 'LampaOnline | network | user_profile | complete http=200 error=none json=true filmix=false');
+    assert.match(env.notices.at(-1), /формат/);
+    assert.equal(env.requests.length, 2);
+});
+
+for (const useProfile of [false, true]) test('cancellation logs completion once and ignores late callbacks: profile=' + useProfile, () => {
+    const env = harness({ storage: useProfile ? { lampa_online_token: 'PRIVATE_TOKEN' } : {} });
+    const screen = env.open(), request = env.requests[0], stage = useProfile ? 'user_profile' : 'search';
+    screen.destroy();
+    assert.deepEqual(networkLines(env, stage), [
+        `LampaOnline | network | ${stage} | start http=0 error=none json=unknown filmix=unknown`,
+        `LampaOnline | network | ${stage} | complete http=0 error=abort json=unknown filmix=unknown`
+    ]);
+    const saved = JSON.stringify(env.logs);
+    env.response([{ id: 1 }], request); env.error(500, 'error', request); env.advance(20000);
+    assert.equal(JSON.stringify(env.logs), saved);
+    assert.equal(env.requests.length, 1); assert.equal(env.timers.size, 0);
+});
+
+test('watchdog reports timeout once despite abort callbacks and a late success', () => {
+    const env = harness(); env.open(); const request = env.requests[0];
+    env.advance(15000); env.response([], request);
+    assert.equal(networkLines(env, 'search').length, 2);
+    assert.equal(networkLines(env, 'search')[1], 'LampaOnline | network | search | complete http=0 error=timeout json=unknown filmix=unknown');
+    assert.equal(env.requests.length, 1);
+});
+
+test('diagnostics never expose tokens, device IDs, URLs, query text, profile data or server error text', () => {
+    const env = harness({ storage: {
+        lampa_online_api_url: 'https://PRIVATE_HOST.example/api/v2/', lampa_online_proxy: 'https://PRIVATE_PROXY.example/',
+        lampa_online_token: 'PRIVATE_TOKEN &+=?', lampa_online_device_id: 'PRIVATE_DEVICE'
+    } });
+    env.open({ title: 'PRIVATE_QUERY' });
+    env.response({ user_data: { user_id: 1, login: 'PRIVATE_LOGIN', is_pro: true } });
+    assert.equal(networkLines(env, 'user_profile')[1], 'LampaOnline | network | user_profile | complete http=200 error=none json=true filmix=true');
+    env.response([{ id: 1, title: 'PRIVATE_TITLE' }]); env.enter(1);
+    env.error(0, 'PRIVATE_ERROR_KIND');
+    assert.equal(networkLines(env, 'post')[1], 'LampaOnline | network | post | complete http=0 error=error json=unknown filmix=unknown');
+    env.enter(1); env.response({ player_links: { movie: [{ link: 'https://media.example/PRIVATE_STREAM.mp4' }] } });
+    assert.equal(networkLines(env, 'post').at(-1), 'LampaOnline | network | post | complete http=200 error=none json=true filmix=true');
+    const logs = JSON.stringify(env.logs);
+    assert.doesNotMatch(logs, /PRIVATE|https?:|user_dev_|%26|%3F/);
 });
