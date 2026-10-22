@@ -13,7 +13,7 @@ const COMPONENT = 'lampa_online_filmix_screen';
 
 function harness(options = {}) {
     let now = 0, nextTimer = 0, active = null, activeName = '';
-    const timers = new Map(), requests = [], logs = [], notices = [], pushes = [];
+    const timers = new Map(), requests = [], logs = [], notices = [], pushes = [], storageWrites = [];
     const components = {}, controllers = {}, settings = [], settingComponents = [], scrolls = [];
     const storage = options.storage || {};
     const listeners = [];
@@ -49,6 +49,28 @@ function harness(options = {}) {
             for (const [name, callback] of Object.entries(this.events)) if (name.split('.')[0] === type) callback();
             return this;
         }
+        find(selector) { return new Collection(flatten(this).slice(1).filter(el => matches(el, selector))); }
+    }
+    const matches = (el, selector) => {
+        const classes = (el.html.match(/class="([^"]*)"/)?.[1] || '').split(/\s+/);
+        return selector.split('.').filter(Boolean).every(name => classes.includes(name));
+    };
+    // Only the scoped jQuery traversal/insertion used by full-card integration.
+    // Collections remain distinct from the node's children array used by Scroll.
+    class Collection {
+        constructor(items) { this.items = items; this.length = items.length; }
+        first() { return new Collection(this.items.slice(0, 1)); }
+        last() { return new Collection(this.items.slice(-1)); }
+        children(selector) { return new Collection(this.items.flatMap(el => el.children).filter(el => matches(el, selector))); }
+        append(el) { this.items[0].append(el); return this; }
+        after(el) {
+            const target = this.items[0], parent = target.parent;
+            el.parent = parent;
+            parent.children.splice(parent.children.indexOf(target) + 1, 0, el);
+            return this;
+        }
+        on(name, callback) { for (const el of this.items) el.on(name, callback); return this; }
+        off(namespace) { for (const el of this.items) el.off(namespace); return this; }
     }
     const body = new Element('body');
     const $ = html => html === 'body' ? body : new Element(html);
@@ -68,14 +90,18 @@ function harness(options = {}) {
             follow(type, callback) { listeners.push({ type, callback }); },
             remove(type, callback) { const index = listeners.findIndex(x => x.type === type && x.callback === callback); if (index >= 0) listeners.splice(index, 1); }
         },
-        Lang: { values: {}, add(values) { Object.assign(this.values, values); }, translate(key) { return this.values[key]?.uk || key; } },
+        Lang: { values: {}, add(values) { Object.assign(this.values, values); }, translate(key) { return this.values[key]?.[options.language || 'uk'] || key; } },
         Storage: {
             get(key, fallback) {
                 const value = Object.hasOwn(storage, key) ? storage[key] : fallback;
                 return options.coerceStorage && /^\d+$/.test(value) ? parseInt(value, 10) : value;
             },
             value(key, fallback) { return String(Object.hasOwn(storage, key) ? storage[key] : fallback || ''); },
-            set(key, value) { storage[key] = value; }
+            set(key, value) {
+                if (options.storageWriteFails && key === 'plugins') throw new Error('synthetic storage failure');
+                storage[key] = value;
+                storageWrites.push({ key, value });
+            }
         },
         Template: { add() {}, get() { return new Element('style'); } },
         Component: { get(name) { return components[name]; }, add(name, value) { assert.equal(components[name], undefined); components[name] = value; } },
@@ -135,6 +161,12 @@ function harness(options = {}) {
             playlist(items) { this.playlists.push(items); }
         }
     };
+    if (options.pluginsApi) Lampa.Plugins = options.pluginsApi;
+    else if (options.installed) Lampa.Plugins = {
+        get() { return options.installed.map(entry => entry); },
+        save() { throw new Error('Plugins.save must not log the installed list'); },
+        push() { throw new Error('rename must not reload or fetch a script'); }
+    };
     // The real Manifest.plugins is an accessor: assignment APPENDS a manifest.
     const unrelatedPlugin = { name: 'Other plugin', type: 'video' };
     const manifests = [unrelatedPlugin];
@@ -153,13 +185,15 @@ function harness(options = {}) {
     });
     context.window = context;
     const env = {
-        Lampa, context, requests, logs, notices, storage, settings, Params, settingComponents, components, scrolls, listeners, manifests, unrelatedPlugin, moves, pushes, timers,
+        Lampa, context, requests, logs, notices, storage, settings, Params, settingComponents, components, scrolls, listeners, manifests, unrelatedPlugin, moves, pushes, timers, body, storageWrites,
+        element(html) { return new Element(html); },
+        full(event) { for (const entry of [...listeners]) if (entry.type === 'full') entry.callback(event); },
         get focus() { return focus; }, get collection() { return collection; }, get backward() { return backward; },
         get rows() { return flatten(scrolls.at(-1).root).filter(el => /\bselector\b/.test(el.html)); },
         get text() { return text(scrolls.at(-1).root); },
         label(el) { return text(el); },
         load() { vm.runInContext(source, context, { filename: 'lampa-online.js' }); },
-        ready() { context.appready = true; for (const entry of [...listeners]) entry.callback({ type: 'ready' }); },
+        ready() { context.appready = true; for (const entry of [...listeners]) if (entry.type === 'app') entry.callback({ type: 'ready' }); },
         advance(ms) {
             now += ms;
             for (const [id, timer] of [...timers]) if (timer.at <= now && timers.delete(id)) timer.callback();
@@ -192,6 +226,69 @@ function postScreen(env, record) {
 }
 const stream = { translation: 'Українська', link: 'https://media.example/movie_[2160,1080,720,480,360].mp4' };
 
+function fullCard(env, movie = { title: 'Фільм', original_title: 'Movie', release_date: '2024-04-02' }, options = {}) {
+    const root = env.element('<div class="full"></div>');
+    const container = env.element('<div class="buttons--container"></div>');
+    const watch = env.element('<div class="button--play selector"></div>').text('Дивитись');
+    root.append(watch);
+    if (!options.noContainer) root.append(container);
+    const source = (className, title) => {
+        const button = env.element('<div class="full-start__button selector ' + className + '"></div>').text(title);
+        button.on('hover:enter.otherSource', () => visits.push(title));
+        container.append(button);
+        return button;
+    };
+    const visits = [];
+    if (!options.noTorrent) source('view--torrent', 'Торренти');
+    source('shots-view-button view--online', 'Shots');
+    source('view--trailer', 'Трейлер');
+    source('view--online', 'Інший онлайн');
+    const fixture = {
+        root, container, watch, visits, source, panel: null, panelIndex: 0,
+        event: { type: 'complite', object: { activity: { render: () => root } }, data: { movie }, body: root },
+        get buttons() { return container.children.filter(el => /\bfull-start__button\b/.test(el.html)); },
+        get online() { return container.children.filter(el => /\bview--lampa-online\b/.test(el.html)); },
+        complete() { env.full(this.event); return this; },
+        selectOnline() {
+            watch.trigger('hover:enter');
+            const index = this.buttons.indexOf(this.online[0]);
+            env.Lampa.Controller.enabled().controller.down();
+            while (this.panelIndex !== index) env.Lampa.Controller.enabled().controller.down();
+            env.focus.trigger('hover:enter');
+        },
+        restore() {
+            env.Lampa.Controller.add('content', {
+                toggle() {
+                    env.Lampa.Controller.collectionSet(watch);
+                    env.Lampa.Controller.collectionFocus(watch, watch);
+                }
+            });
+            env.Lampa.Controller.toggle('content');
+        }
+    };
+    // Mock Lampa's native grouping contract from full/start/buttons.js: Watch
+    // reads direct source children on each open, then selection triggers the
+    // original button. Navigation/Back belong to Lampa, not to our source hook.
+    watch.on('hover:enter.nativeWatch', () => {
+        const panel = env.element('<div class="select"></div>');
+        fixture.panel = panel;
+        fixture.panelIndex = 0;
+        for (const button of fixture.buttons) {
+            panel.append(env.element('<div class="selector"></div>').on('hover:enter', () => button.trigger('hover:enter')));
+        }
+        const move = delta => {
+            fixture.panelIndex = (fixture.panelIndex + delta + panel.children.length) % panel.children.length;
+            env.Lampa.Controller.collectionFocus(panel.children[fixture.panelIndex], panel);
+        };
+        env.Lampa.Controller.add('select', {
+            toggle() { env.Lampa.Controller.collectionSet(panel); move(0); },
+            up() { move(-1); }, down() { move(1); }, back() { fixture.restore(); }
+        });
+        env.Lampa.Controller.toggle('select');
+    });
+    return fixture;
+}
+
 test('standalone plugin parses as ES5', () => {
     const result = spawnSync(process.execPath, ['--expose-internals', '-e',
         "require('internal/deps/acorn/acorn/dist/acorn').parse(require('fs').readFileSync(process.argv[1],'utf8'),{ecmaVersion:5})", pluginPath], { encoding: 'utf8' });
@@ -204,11 +301,12 @@ test('ready listener and all registrations are unique across reloads', () => {
     assert.equal(env.listeners.length, 1);
     assert.equal(Object.keys(env.components).length, 0);
     env.ready(); env.ready(); env.load();
-    assert.equal(env.listeners.length, 0);
+    assert.equal(env.listeners.length, 1);
+    assert.equal(env.listeners[0].type, 'full');
     assert.equal(Object.keys(env.components).length, 1);
     assert.equal(env.manifests.length, 2);
     assert.equal(env.manifests[0], env.unrelatedPlugin);
-    assert.equal(env.manifests[1].version, '0.1.2');
+    assert.equal(env.manifests[1].version, '0.1.3');
     assert.equal(env.settingComponents.length, 1);
     assert.equal(env.settings.length, 4);
 });
@@ -230,7 +328,7 @@ test('context menu launches the registered component, including missing card fie
     const env = harness();
     const manifest = env.manifests[1];
     assert.equal(manifest.type, 'video');
-    assert.match(manifest.onContextMenu().name, /Lampa Online/);
+    assert.match(manifest.onContextMenu().name, /ZebMod/);
     manifest.onContextLauch({ original_name: 'Original' });
     manifest.onContextLauch();
     assert.equal(env.pushes[0].component, COMPONENT);
@@ -683,4 +781,462 @@ test('diagnostics never expose tokens, device IDs, URLs, query text, profile dat
     assert.equal(networkLines(env, 'post').at(-1), 'LampaOnline | network | post | complete http=200 error=none json=true filmix=true');
     const logs = JSON.stringify(env.logs);
     assert.doesNotMatch(logs, /PRIVATE|https?:|user_dev_|%26|%3F/);
+});
+
+test('full listener registers once at ready and stays unique after reloads', () => {
+    const env = harness({ ready: false });
+    assert.equal(env.listeners.filter(x => x.type === 'full').length, 0);
+    env.load(); env.ready(); env.ready(); env.load();
+    assert.equal(env.listeners.filter(x => x.type === 'full').length, 1);
+    assert.equal(env.listeners.filter(x => x.type === 'app').length, 0);
+});
+
+test('only full/complite with card data adds a source', () => {
+    const env = harness(), card = fullCard(env);
+    for (const event of [undefined, {}, { ...card.event, type: 'complete' },
+        { ...card.event, type: 'start' }, { ...card.event, type: 'build' },
+        { ...card.event, data: undefined }, { ...card.event, data: {} }]) {
+        assert.doesNotThrow(() => env.full(event));
+        assert.equal(card.online.length, 0);
+    }
+    card.complete();
+    assert.equal(card.online.length, 1);
+    assert.equal(env.requests.length, 0, 'full-card completion never starts Filmix requests');
+});
+
+test('source has the standard classes, play SVG, name and remote enter binding', () => {
+    const env = harness(), card = fullCard(env).complete();
+    assert.match(card.online[0].html, /class="full-start__button selector view--lampa-online"/);
+    assert.match(card.online[0].html, /<svg[^>]*viewBox="0 0 24 24"/);
+    assert.match(card.online[0].html, /<path[^>]*fill="currentColor"/);
+    assert.match(card.online[0].html, /<span>ZebMod<\/span>/);
+    card.online[0].trigger('hover:enter');
+    assert.equal(env.pushes.length, 1);
+    assert.equal(env.pushes[0].component, COMPONENT);
+    assert.ok(env.components[env.pushes[0].component]);
+});
+
+test('source is a direct container child immediately after the last torrent', () => {
+    const env = harness(), card = fullCard(env);
+    const lastTorrent = card.source('view--torrent', 'Другі торренти');
+    card.complete();
+    assert.equal(card.online[0].parent, card.container);
+    assert.equal(card.container.children.indexOf(card.online[0]), card.container.children.indexOf(lastTorrent) + 1);
+});
+
+test('missing torrent appends the source to the local standard container', () => {
+    const env = harness(), card = fullCard(env, undefined, { noTorrent: true });
+    const previous = [...card.container.children];
+    card.complete();
+    assert.deepEqual(card.container.children.slice(0, -1), previous);
+    assert.equal(card.container.children.at(-1), card.online[0]);
+});
+
+test('missing local container cannot inject a source into another card or global body', () => {
+    const env = harness(), other = fullCard(env), card = fullCard(env, undefined, { noContainer: true });
+    env.body.append(other.root);
+    const originalBody = [...env.body.children];
+    card.complete();
+    assert.equal(card.online.length, 0);
+    assert.equal(other.online.length, 0);
+    assert.deepEqual(env.body.children, originalBody);
+    assert.equal(env.requests.length, 0);
+});
+
+test('event activity render determines scope even when body belongs to another card', () => {
+    const env = harness(), card = fullCard(env), other = fullCard(env);
+    card.event.body = other.root;
+    card.complete();
+    assert.equal(card.online.length, 1);
+    assert.equal(other.online.length, 0);
+});
+
+test('event body is a scoped fallback when activity render is unavailable', () => {
+    const env = harness(), card = fullCard(env);
+    delete card.event.object;
+    card.complete();
+    assert.equal(card.online.length, 1);
+    card.online[0].trigger('hover:enter');
+    assert.equal(env.pushes[0].movie, card.event.data.movie);
+});
+
+test('missing or incompatible full-card DOM is safely ignored', () => {
+    const env = harness();
+    for (const body of [undefined, null, {}, 'not a jQuery root']) {
+        assert.doesNotThrow(() => env.full({ type: 'complite', data: { movie: {} }, body }));
+    }
+    assert.equal(env.pushes.length, 0);
+});
+
+test('repeated completion reuses one source and one handler without removing foreign handlers', () => {
+    const env = harness(), card = fullCard(env).complete(), button = card.online[0];
+    let foreignEnters = 0;
+    button.on('hover:enter.foreign', () => foreignEnters++);
+    for (let i = 0; i < 20; i++) card.complete();
+    assert.deepEqual(card.online, [button]);
+    assert.equal(Object.keys(button.events).filter(name => name.endsWith('.lampaOnlineSource')).length, 1);
+    button.trigger('hover:enter');
+    assert.equal(env.pushes.length, 1);
+    assert.equal(foreignEnters, 1);
+});
+
+test('reloading JS and completing the existing card cannot duplicate sources or launches', () => {
+    const env = harness(), card = fullCard(env).complete();
+    for (let i = 0; i < 10; i++) { env.load(); card.complete(); }
+    assert.equal(card.online.length, 1);
+    assert.equal(env.listeners.filter(x => x.type === 'full').length, 1);
+    card.online[0].trigger('hover:enter');
+    assert.equal(env.pushes.length, 1);
+    assert.equal(env.manifests.length, 2);
+    assert.equal(env.settings.length, 4);
+});
+
+test('source and legacy context launch share the same complete film payload', () => {
+    const env = harness();
+    const movie = { id: 17, title: 'Назва', original_title: 'Original', release_date: '2021-07-06', year: '2021', extra: { preserved: true } };
+    const card = fullCard(env, movie).complete();
+    card.online[0].trigger('hover:enter');
+    env.manifests[1].onContextLauch(movie);
+    assert.deepEqual(env.pushes[0], env.pushes[1]);
+    assert.equal(env.pushes[0].movie, movie);
+    assert.equal(env.pushes[0].movie.original_title, 'Original');
+    assert.equal(env.pushes[0].movie.release_date, '2021-07-06');
+    assert.equal(env.pushes[0].search, 'Назва');
+    assert.equal(env.pushes[0].page, 1);
+    assert.equal(env.pushes[0].title, 'ZebMod');
+});
+
+test('series source preserves names, year, type, seasons and original card identity', () => {
+    const env = harness();
+    const movie = { id: 18, name: 'Серіал', original_name: 'Series', first_air_date: '2019-02-03',
+        type: 'tv', number_of_seasons: 3, seasons: [{ season_number: 1 }] };
+    const card = fullCard(env, movie).complete();
+    card.online[0].trigger('hover:enter');
+    const payload = env.pushes[0];
+    assert.equal(payload.movie, movie);
+    assert.equal(payload.search, 'Серіал');
+    assert.equal(payload.movie.original_name, 'Series');
+    assert.equal(payload.movie.first_air_date, '2019-02-03');
+    assert.equal(payload.movie.type, 'tv');
+    assert.equal(payload.movie.number_of_seasons, 3);
+    assert.equal(payload.movie.seasons, movie.seasons);
+    env.open(payload.movie);
+    assert.equal(new URL(env.requests.at(-1).params.url).searchParams.get('story'), 'Серіал');
+    env.response([{ id: 18, title: 'Серіал' }]);
+    assert.match(env.text, /2019/);
+});
+
+test('source supports original-only and empty-title cards just like the context launcher', () => {
+    const env = harness();
+    for (const movie of [{ original_title: 'Original film' }, { original_name: 'Original series' }, {}]) {
+        const card = fullCard(env, movie).complete();
+        card.online[0].trigger('hover:enter');
+        env.manifests[1].onContextLauch(movie);
+        assert.deepEqual(env.pushes.at(-1), env.pushes.at(-2));
+        assert.equal(env.pushes.at(-1).search, movie.original_title || movie.original_name || '');
+    }
+});
+
+test('reused card DOM updates the source handler to the new movie', () => {
+    const env = harness(), card = fullCard(env).complete(), button = card.online[0];
+    const next = { name: 'Інший серіал', original_name: 'Next series', first_air_date: '2025-01-01' };
+    card.event.data = { movie: next };
+    card.complete(); button.trigger('hover:enter');
+    assert.equal(card.online[0], button);
+    assert.equal(env.pushes.length, 1);
+    assert.equal(env.pushes[0].movie, next);
+});
+
+test('different full-card activities keep independent source handlers and movie data', () => {
+    const env = harness(), first = fullCard(env, { title: 'Перший' }).complete();
+    const second = fullCard(env, { name: 'Другий' }).complete();
+    first.complete(); second.complete();
+    first.online[0].trigger('hover:enter'); second.online[0].trigger('hover:enter');
+    assert.equal(first.online.length, 1); assert.equal(second.online.length, 1);
+    assert.equal(env.pushes[0].search, 'Перший'); assert.equal(env.pushes[1].search, 'Другий');
+});
+
+test('reopening the same film in new DOM creates exactly one local source', () => {
+    const env = harness(), movie = { id: 1, title: 'Повторний' };
+    for (let i = 0; i < 5; i++) {
+        const card = fullCard(env, movie).complete();
+        card.complete();
+        assert.equal(card.online.length, 1);
+        card.online[0].trigger('hover:enter');
+        assert.equal(env.pushes.at(-1).movie, movie);
+    }
+    assert.equal(env.listeners.filter(x => x.type === 'full').length, 1);
+    assert.equal(env.pushes.length, 5);
+});
+
+test('standard Watch handler opens a single source item on every panel reopen', () => {
+    const env = harness(), card = fullCard(env), nativeWatch = card.watch.events['hover:enter.nativeWatch'];
+    card.complete(); card.restore();
+    for (let i = 0; i < 5; i++) {
+        card.watch.trigger('hover:enter');
+        assert.equal(card.panel.children.length, 5);
+        assert.equal(card.online.length, 1);
+        env.back();
+        assert.equal(env.focus, card.watch);
+    }
+    assert.equal(card.watch.events['hover:enter.nativeWatch'], nativeWatch);
+    assert.equal(env.pushes.length, 0);
+});
+
+test('native source panel Up/Down and OK launch ZebMod without replacing controllers', () => {
+    const env = harness(), card = fullCard(env).complete();
+    card.restore(); card.watch.trigger('hover:enter');
+    const controller = env.Lampa.Controller.enabled().controller;
+    controller.down(); assert.equal(card.panelIndex, 1);
+    controller.up(); assert.equal(card.panelIndex, 0);
+    controller.down(); env.focus.trigger('hover:enter');
+    assert.equal(env.pushes.length, 1);
+    assert.equal(env.pushes[0].movie, card.event.data.movie);
+    assert.equal(env.Lampa.Controller.enabled().controller, controller);
+});
+
+test('Back from source-launched search delegates to Activity and restores the native card focus', () => {
+    const env = harness(), card = fullCard(env).complete();
+    const push = env.Lampa.Activity.push, backward = env.Lampa.Activity.backward;
+    env.Lampa.Activity.push = value => { push(value); env.open(value.movie); };
+    // Model the host activity stack: the plugin must call backward; the host
+    // resumes its own controller/last focus. Actual Android focus is NOT VERIFIED.
+    env.Lampa.Activity.backward = () => { backward(); card.restore(); };
+    card.restore(); card.selectOnline();
+    assert.equal(env.pushes.length, 1);
+    const pending = env.requests.at(-1);
+    env.back();
+    assert.equal(env.backward, 1);
+    assert.equal(pending.aborted, true);
+    assert.equal(env.focus, card.watch);
+    env.response([{ id: 1, title: 'Late response' }], pending);
+    assert.equal(env.focus, card.watch);
+    card.complete();
+    assert.equal(card.online.length, 1);
+    card.watch.trigger('hover:enter');
+    assert.equal(card.panel.children.length, 5);
+    card.buttons[0].trigger('hover:enter');
+    assert.deepEqual(card.visits, ['Торренти']);
+    env.back();
+    assert.equal(env.focus, card.watch);
+    card.selectOnline();
+    assert.equal(env.pushes.length, 2);
+    env.back();
+    assert.equal(env.backward, 2);
+});
+
+test('other sources keep order, handlers and availability including sources added later', () => {
+    const env = harness(), card = fullCard(env);
+    const original = [...card.buttons], handlers = original.map(button => ({ ...button.events }));
+    const controller = { back() {} };
+    env.Lampa.Controller.add('content', controller); env.Lampa.Controller.toggle('content');
+    card.complete(); card.complete();
+    assert.equal(env.Lampa.Controller.enabled().controller, controller);
+    assert.deepEqual(card.buttons.filter(button => button !== card.online[0]), original);
+    for (const [index, button] of original.entries()) {
+        assert.deepEqual(button.events, handlers[index]);
+        button.trigger('hover:enter');
+    }
+    assert.deepEqual(card.visits, ['Торренти', 'Shots', 'Трейлер', 'Інший онлайн']);
+    card.source('view--external', 'Пізніше джерело');
+    card.watch.trigger('hover:enter');
+    assert.equal(card.panel.children.length, 6);
+    assert.equal(env.pushes.length, 0);
+    assert.equal(env.requests.length, 0);
+});
+
+const INSTALL_URL = 'https://zwanns.github.io/zeb.js';
+
+test('public manifest is ZebMod v0.1.3 with the original component identifier', () => {
+    const env = harness(), manifest = env.manifests[1];
+    assert.equal(manifest.name, 'ZebMod');
+    assert.equal(manifest.version, '0.1.3');
+    assert.equal(manifest.type, 'video');
+    assert.equal(manifest.component, COMPONENT);
+    assert.equal(env.context.__lampa_online_loaded, true);
+    assert.equal(env.context.__zebmod_loaded, undefined);
+    assert.equal(env.manifests[0], env.unrelatedPlugin);
+});
+
+test('settings display ZebMod while keeping the existing component and all four storage keys', () => {
+    const env = harness();
+    assert.equal(env.settingComponents[0].name, 'ZebMod');
+    assert.equal(env.settingComponents[0].component, 'lampa_online_settings');
+    assert.deepEqual(env.settings.map(setting => setting.param.name), [
+        'lampa_online_api_url', 'lampa_online_token', 'lampa_online_proxy', 'lampa_online_device_id'
+    ]);
+    assert.ok(env.settings.every(setting => setting.component === 'lampa_online_settings'));
+});
+
+test('uk, ru and en use ZebMod for the context menu, activity title, screen heading and source', () => {
+    for (const [language, watch] of Object.entries({
+        uk: 'Дивитися через ZebMod', ru: 'Смотреть через ZebMod', en: 'Watch via ZebMod'
+    })) {
+        const env = harness({ language }), card = fullCard(env).complete();
+        assert.equal(env.Lampa.Lang.translate('lampa_online_name'), 'ZebMod');
+        assert.equal(env.manifests[1].onContextMenu().name, watch);
+        assert.match(card.online[0].html, /<span>ZebMod<\/span>/);
+        assert.doesNotMatch(card.online[0].html, /Lampa Online/);
+        card.online[0].trigger('hover:enter');
+        assert.equal(env.pushes[0].title, 'ZebMod');
+        env.open(env.pushes[0].movie);
+        assert.match(env.text, /ZebMod · Filmix/);
+        env.response([{ id: 1, title: 'Movie' }]);
+        assert.match(env.text, /ZebMod · Filmix/);
+        env.enter(1); env.response({ player_links: { movie: [stream] } });
+        assert.match(env.text, /ZebMod · Filmix/);
+    }
+});
+
+test('ZebMod source keeps its technical class and one launch across ready, reload and repeated completion', () => {
+    const env = harness(), card = fullCard(env).complete();
+    for (let i = 0; i < 10; i++) { env.ready(); env.load(); card.complete(); }
+    assert.equal(card.online.length, 1);
+    assert.match(card.online[0].html, /view--lampa-online/);
+    assert.match(card.online[0].html, /<span>ZebMod<\/span>/);
+    assert.equal(env.listeners.filter(listener => listener.type === 'full').length, 1);
+    assert.equal(env.settingComponents.length, 1);
+    assert.equal(env.manifests.length, 2);
+    card.online[0].trigger('hover:enter');
+    assert.equal(env.pushes.length, 1);
+    assert.equal(env.pushes[0].title, 'ZebMod');
+});
+
+test('installed extension name updates only the exact own URL in live and persisted lists', () => {
+    const own = { url: INSTALL_URL, name: 'Lampa Online', status: 1, author: 'Existing author', descr: 'Keep description' };
+    const other = { url: 'https://other.example/plugin.js?PRIVATE_VALUE', name: 'Lampa Online', status: 0, nested: { keep: true } };
+    const installed = [other, own];
+    const storage = { plugins: JSON.parse(JSON.stringify(installed)) };
+    // The fresh stored list may have newer unrelated metadata than Plugins.get().
+    storage.plugins[0].descr = 'Fresh metadata';
+    const expectedOther = JSON.stringify(storage.plugins[0]);
+    const env = harness({ installed, storage });
+    assert.equal(own.name, 'ZebMod');
+    assert.equal(other.name, 'Lampa Online');
+    assert.equal(storage.plugins[1].name, 'ZebMod');
+    assert.equal(JSON.stringify(storage.plugins[0]), expectedOther);
+    assert.equal(storage.plugins[1].author, 'Existing author');
+    assert.equal(storage.plugins[1].descr, 'Keep description');
+    assert.equal(storage.plugins[1].status, 1);
+    assert.equal(storage.plugins[1].url, INSTALL_URL);
+    assert.equal(env.Lampa.Plugins.get().reverse()[0].name, 'ZebMod', 'native installed cards read data.name from Plugins.get()');
+    assert.equal(env.storageWrites.filter(write => write.key === 'plugins').length, 1);
+    assert.equal(env.requests.length, 0);
+    assert.doesNotMatch(JSON.stringify(env.logs), /PRIVATE_VALUE|https?:|Fresh metadata/);
+});
+
+test('old user configuration survives the rename, including exact tokens and leading-zero device IDs', () => {
+    const storage = {
+        lampa_online_api_url: 'https://existing.example/api/v2/', lampa_online_token: 'synthetic-old-token',
+        lampa_online_proxy: 'https://proxy.example/', lampa_online_device_id: '00001234567890123456',
+        video_quality_default: '1080', unrelated_setting: { retained: true },
+        plugins: [{ url: INSTALL_URL, name: 'Lampa Online', status: 1 }]
+    };
+    const original = JSON.parse(JSON.stringify(storage));
+    const installed = JSON.parse(JSON.stringify(storage.plugins));
+    const env = harness({ storage, installed, coerceStorage: true });
+    const expected = { ...original, plugins: [{ ...original.plugins[0], name: 'ZebMod' }] };
+    assert.deepEqual(JSON.parse(JSON.stringify(storage)), expected);
+    assert.deepEqual(env.storageWrites.map(write => write.key), ['plugins']);
+    env.open({ title: 'Назва' });
+    const url = new URL(env.requests[0].params.url.slice('https://proxy.example/'.length));
+    assert.equal(url.searchParams.get('user_dev_token'), original.lampa_online_token);
+    assert.equal(url.searchParams.get('user_dev_id'), original.lampa_online_device_id);
+    assert.equal(url.pathname, '/api/v2/user_profile');
+    assert.ok(Object.keys(storage).every(key => !key.startsWith('zebmod_')));
+});
+
+test('installed rename is idempotent across duplicate initialization and a persisted restart', () => {
+    const storage = { plugins: [{ url: INSTALL_URL, name: 'Lampa Online', status: 1 }] };
+    const installed = JSON.parse(JSON.stringify(storage.plugins));
+    const first = harness({ storage, installed });
+    first.ready(); first.load(); first.ready(); first.load();
+    assert.equal(first.storageWrites.filter(write => write.key === 'plugins').length, 1);
+    assert.equal(storage.plugins.length, 1);
+    const persisted = JSON.parse(JSON.stringify(storage));
+    const second = harness({ storage: persisted, installed: persisted.plugins });
+    assert.equal(second.storageWrites.filter(write => write.key === 'plugins').length, 0);
+    assert.equal(second.Lampa.Plugins.get()[0].name, 'ZebMod');
+    assert.equal(second.manifests.length, 2);
+    assert.equal(second.settingComponents.length, 1);
+});
+
+test('installed rename never guesses identity from names, URL substrings, query variants or other hosts', () => {
+    const entries = [
+        { url: 'https://other.example/zeb.js', name: 'ZebMod' },
+        { url: 'https://other.example/lampa-online.js', name: 'Lampa Online' },
+        { url: 'http://zwanns.github.io/zeb.js', name: 'Lampa Online' },
+        { url: INSTALL_URL + '?cache=1', name: 'Lampa Online' },
+        { url: INSTALL_URL + '#fragment', name: 'Lampa Online' },
+        { url: INSTALL_URL + '.other.js', name: 'Lampa Online' },
+        { url: 'https://zwanns.github.io.evil.example/zeb.js', name: 'Lampa Online' },
+        { link: INSTALL_URL, name: 'Lampa Online' }
+    ];
+    const original = JSON.stringify(entries);
+    const storage = { plugins: JSON.parse(original) };
+    const env = harness({ installed: entries, storage });
+    assert.equal(JSON.stringify(entries), original);
+    assert.equal(JSON.stringify(storage.plugins), original);
+    assert.equal(env.storageWrites.filter(write => write.key === 'plugins').length, 0);
+    assert.equal(env.manifests[1].name, 'ZebMod');
+});
+
+test('installed rename requires an own record in both lists and skips ambiguous duplicates', () => {
+    const own = { url: INSTALL_URL, name: 'Lampa Online', status: 1 };
+    for (const [live, stored] of [
+        [[], [own]], [[own], []], [[own, own], [own]], [[own], [own, own]]
+    ]) {
+        const installed = JSON.parse(JSON.stringify(live)), storage = { plugins: JSON.parse(JSON.stringify(stored)) };
+        const beforeLive = JSON.stringify(installed), beforeStored = JSON.stringify(storage.plugins);
+        const env = harness({ installed, storage });
+        assert.equal(JSON.stringify(installed), beforeLive);
+        assert.equal(JSON.stringify(storage.plugins), beforeStored);
+        assert.equal(env.storageWrites.filter(write => write.key === 'plugins').length, 0);
+        assert.equal(env.manifests[1].name, 'ZebMod');
+    }
+});
+
+test('missing host API and malformed installed lists do not prevent ZebMod startup or rewrite storage', () => {
+    for (const [pluginsApi, value] of [
+        [{}, []], [{ get: 'incompatible' }, []], [{ get: () => null }, []],
+        [{ get: () => ({ url: INSTALL_URL }) }, []],
+        [{ get: () => [{ url: INSTALL_URL }] }, 'malformed'],
+        [{ get: () => [{ url: INSTALL_URL }] }, null],
+        [{ get() { throw new Error('PRIVATE host error'); } }, []]
+    ]) {
+        const storage = { plugins: value };
+        const env = harness({ pluginsApi, storage });
+        assert.equal(storage.plugins, value);
+        assert.equal(env.storageWrites.filter(write => write.key === 'plugins').length, 0);
+        assert.equal(env.manifests[1].name, 'ZebMod');
+        assert.equal(env.settingComponents[0].name, 'ZebMod');
+        assert.doesNotMatch(JSON.stringify(env.logs), /PRIVATE/);
+    }
+});
+
+test('failed installed metadata persistence leaves the live record intact and the plugin usable', () => {
+    const installed = [{ url: INSTALL_URL, name: 'Lampa Online', status: 1 }];
+    const storage = { plugins: JSON.parse(JSON.stringify(installed)) };
+    const env = harness({ installed, storage, storageWriteFails: true });
+    assert.equal(installed[0].name, 'Lampa Online');
+    assert.equal(storage.plugins[0].name, 'Lampa Online');
+    assert.equal(env.manifests[1].name, 'ZebMod');
+    fullCard(env).complete().online[0].trigger('hover:enter');
+    assert.equal(env.pushes[0].title, 'ZebMod');
+});
+
+test('installed rename keeps global host methods unchanged and never calls plugin save, push or add', () => {
+    const installed = [{ url: INSTALL_URL, name: 'Lampa Online', status: 1 }];
+    const pluginsApi = {
+        get() { return installed.slice(); },
+        save() { assert.fail('must not log all plugins'); },
+        push() { assert.fail('must not reload the plugin'); },
+        add() { assert.fail('must not duplicate the plugin'); }
+    };
+    const methods = { ...pluginsApi }, storage = { plugins: JSON.parse(JSON.stringify(installed)) };
+    const env = harness({ pluginsApi, storage });
+    for (const key of Object.keys(methods)) assert.equal(env.Lampa.Plugins[key], methods[key]);
+    assert.equal(installed[0].name, 'ZebMod');
+    assert.equal(env.requests.length, 0);
+    assert.equal(env.storageWrites.filter(write => write.key === 'plugins').length, 1);
 });
