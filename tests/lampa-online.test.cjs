@@ -178,6 +178,7 @@ function harness(options = {}) {
     const Navigator = { move(direction) { moves.push(direction); }, canmove() { return false; } };
     const context = vm.createContext({
         Lampa: options.noLampa ? undefined : Lampa, $, Navigator,
+        performance: { now() { return now; } },
         appready: options.ready !== false,
         console: { log(...args) { logs.push(args); }, warn(...args) { logs.push(args); }, error(...args) { logs.push(args); } },
         setTimeout(callback, ms) { const id = ++nextTimer; timers.set(id, { at: now + ms, callback }); return id; },
@@ -306,7 +307,7 @@ test('ready listener and all registrations are unique across reloads', () => {
     assert.equal(Object.keys(env.components).length, 1);
     assert.equal(env.manifests.length, 2);
     assert.equal(env.manifests[0], env.unrelatedPlugin);
-    assert.equal(env.manifests[1].version, '0.1.3');
+    assert.equal(env.manifests[1].version, '0.1.4');
     assert.equal(env.settingComponents.length, 1);
     assert.equal(env.settings.length, 4);
 });
@@ -1047,10 +1048,10 @@ test('other sources keep order, handlers and availability including sources adde
 
 const INSTALL_URL = 'https://zwanns.github.io/zeb.js';
 
-test('public manifest is ZebMod v0.1.3 with the original component identifier', () => {
+test('public manifest is ZebMod v0.1.4 with the original component identifier', () => {
     const env = harness(), manifest = env.manifests[1];
     assert.equal(manifest.name, 'ZebMod');
-    assert.equal(manifest.version, '0.1.3');
+    assert.equal(manifest.version, '0.1.4');
     assert.equal(manifest.type, 'video');
     assert.equal(manifest.component, COMPONENT);
     assert.equal(env.context.__lampa_online_loaded, true);
@@ -1240,3 +1241,267 @@ test('installed rename keeps global host methods unchanged and never calls plugi
     assert.equal(env.requests.length, 0);
     assert.equal(env.storageWrites.filter(write => write.key === 'plugins').length, 1);
 });
+
+const formatFixtures = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'filmix', 'formats.json'), 'utf8'));
+const detailLogs = env => env.logs.map(args => args[0]).filter(line => line.startsWith('LampaOnline | diagnostic | '));
+const diagnosticText = env => env.scrolls.at(-1).root.children
+    .filter(el => el.html === '<div class="lampa-online-diagnostic"></div>')
+    .map(el => env.label(el)).join(' | ');
+
+for (const [status, kind, explanation] of [
+    [0, 'error', /Причину не визначено.*мережа.*DNS.*CORS.*TLS/],
+    [401, 'error', /401\/403/], [403, 'error', /401\/403/], [404, 'error', /404/],
+    [429, 'error', /429/], [500, 'error', /5xx/], [0, 'timeout', /вчасно/],
+    [200, 'parsererror', /некоректний JSON/]
+]) test(`TV diagnostics show allowlisted search metadata for ${status}/${kind}`, () => {
+    const env = harness(); env.open(); env.advance(1200); env.error(status, kind);
+    const text = diagnosticText(env);
+    assert.match(text, /Етап: search/);
+    assert.match(text, /Transport: WebView AJAX/);
+    assert.ok(text.includes('HTTP: ' + status));
+    assert.ok(text.includes('Error: ' + kind));
+    assert.match(text, /Час: 1200 ms/);
+    assert.match(text, explanation);
+    assert.match(env.label(env.focus), /повтору/);
+    assert.equal(env.rows.length, 2, 'diagnostic text does not add extra navigation targets');
+    assert.equal(env.loading, false);
+    assert.ok(detailLogs(env)[0].includes('transport=ajax http=' + status + ' error=' + kind + ' elapsed_ms=1200'));
+    env.enter(1); assert.equal(env.requests.length, 2);
+    assert.equal(diagnosticText(env), '', 'retry clears the previous failure');
+    env.advance(35); env.error(0);
+    assert.match(diagnosticText(env), /Час: 35 ms/);
+});
+
+test('actual malformed JSON retains HTTP status, elapsed time and separate JSON/Filmix flags on TV', () => {
+    const env = harness(); env.open(); env.advance(41);
+    env.response('<html>PRIVATE_RESPONSE</html>', undefined, 502);
+    assert.match(diagnosticText(env), /HTTP: 502.*Error: parsererror.*Час: 41 ms.*JSON: false · Filmix: false/);
+    assert.doesNotMatch(diagnosticText(env), /PRIVATE_RESPONSE|<html>/);
+    assert.match(detailLogs(env)[0], /http=502 error=parsererror elapsed_ms=41 json=false filmix=false$/);
+});
+
+test('valid JSON with unexpected search/post shape is reported as a response format issue', () => {
+    const env = harness(); env.open(); env.advance(10); env.response({ private: 'PRIVATE_BODY' });
+    assert.match(diagnosticText(env), /HTTP: 200.*Error: none.*JSON: true · Filmix: false/);
+    assert.match(diagnosticText(env), /Неочікуваний формат/);
+    assert.doesNotMatch(diagnosticText(env), /PRIVATE_BODY|Причину не визначено/);
+    env.enter(1); env.response(formatFixtures.search); env.enter(1);
+    env.response({ player_links: [] });
+    assert.match(diagnosticText(env), /Етап: post.*JSON: true · Filmix: false.*Неочікуваний формат/);
+    assert.equal(env.rows.length, 2, 'malformed post envelope retains a retry row');
+});
+
+test('post errors display the correct stage and Back restores the selected cached result', () => {
+    const env = harness(); env.open(); env.response([{ id: 1 }, { id: 2 }]); env.enter(2);
+    env.advance(271); env.error(429);
+    assert.match(diagnosticText(env), /Етап: post.*HTTP: 429.*Час: 271 ms/);
+    const count = env.requests.length;
+    env.back();
+    assert.equal(diagnosticText(env), '');
+    assert.match(env.label(env.focus), /ID 2/);
+    assert.equal(env.requests.length, count);
+});
+
+test('profile failures remain visible without console while guest search continues and can be retried', () => {
+    const env = harness({ storage: { lampa_online_token: 'SYNTHETIC_PRIVATE_TOKEN' } }); env.open();
+    env.advance(212); env.error(403);
+    assert.match(diagnosticText(env), /Етап: user_profile.*HTTP: 403.*Час: 212 ms/);
+    assert.equal(env.requests.length, 2, 'guest search still proceeds');
+    env.response(formatFixtures.search);
+    assert.match(diagnosticText(env), /Етап: user_profile/);
+    const retryIndex = env.rows.findIndex(row => /Повторити user_profile/.test(env.label(row)));
+    assert.ok(retryIndex > 1, 'profile retry follows ordinary results');
+    env.enter(retryIndex);
+    assert.equal(new URL(env.requests.at(-1).params.url).pathname, '/api/v2/user_profile');
+    assert.equal(diagnosticText(env), '');
+    env.response(formatFixtures.profile);
+    assert.equal(new URL(env.requests.at(-1).params.url).pathname, '/api/v2/search');
+    env.response(formatFixtures.search);
+    assert.equal(diagnosticText(env), '');
+    assert.ok(env.rows.every(row => !/Повторити user_profile/.test(env.label(row))));
+});
+
+test('invalid profile shape stays distinct from failed parsing and profile/search diagnostics coexist', () => {
+    const env = harness({ storage: { lampa_online_token: 'SYNTHETIC_PRIVATE_TOKEN' } }); env.open();
+    env.response({ unexpected: 'PRIVATE_PROFILE' }); env.advance(111); env.error(0);
+    const text = diagnosticText(env);
+    assert.match(text, /Етап: user_profile.*JSON: true · Filmix: false/);
+    assert.match(text, /Етап: search.*Час: 111 ms.*Причину не визначено/);
+    assert.equal(env.scrolls.at(-1).root.children.filter(el => el.html === '<div class="lampa-online-diagnostic"></div>').length, 2);
+    assert.doesNotMatch(text, /PRIVATE_PROFILE|SYNTHETIC_PRIVATE_TOKEN/);
+});
+
+test('Back during profile retry from sources closes the screen and suppresses the pending profile', () => {
+    const env = harness({ storage: { lampa_online_token: 'SYNTHETIC_TOKEN' } }); env.open();
+    env.error(403); env.response(formatFixtures.search); env.enter(1); env.response(formatFixtures.movieArray);
+    const retryIndex = env.rows.findIndex(row => /Повторити user_profile/.test(env.label(row)));
+    assert.ok(retryIndex > 1);
+    env.enter(retryIndex);
+    const pending = env.requests.at(-1), count = env.requests.length;
+    env.back();
+    assert.equal(env.backward, 1);
+    assert.equal(pending.aborted, true);
+    env.response(formatFixtures.profile, pending);
+    assert.equal(env.requests.length, count);
+    assert.equal(env.timers.size, 0);
+});
+
+test('TV diagnostic content and all logs exclude URLs, auth, cookies, headers and raw exceptions', () => {
+    const env = harness({ storage: {
+        lampa_online_api_url: 'https://PRIVATE_API.example/api/v2/',
+        lampa_online_proxy: 'https://PRIVATE_PROXY.example/',
+        lampa_online_token: 'PRIVATE_TOKEN', lampa_online_device_id: 'PRIVATE_DEVICE'
+    } });
+    env.open({ title: 'Safe title' });
+    env.requests[0].params.error({ status: 0, responseText: 'PRIVATE_BODY',
+        message: 'PRIVATE_EXCEPTION', cookie: 'PRIVATE_COOKIE', headers: { Authorization: 'PRIVATE_HEADER' } }, 'PRIVATE_ERROR');
+    env.requests[1].params.error({ status: 0, responseText: 'PRIVATE_BODY' }, 'PRIVATE_ERROR');
+    const output = diagnosticText(env) + JSON.stringify(env.logs) + JSON.stringify(env.notices);
+    assert.doesNotMatch(output, /PRIVATE|https?:|user_dev_|Authorization|cookie|responseText/);
+    assert.match(output, /Error: error/);
+});
+
+test('unrecognized configuration exceptions never display exception messages or fabricated network diagnostics', () => {
+    const env = harness();
+    const original = env.Lampa.Storage.get;
+    env.Lampa.Storage.get = function (key, fallback) {
+        if (key === 'lampa_online_api_url') throw new Error('PRIVATE_EXCEPTION https://private.example/?token=secret');
+        return original(key, fallback);
+    };
+    env.open();
+    assert.equal(env.requests.length, 0);
+    assert.equal(diagnosticText(env), '');
+    assert.match(env.text, /Некоректна адреса/);
+    assert.doesNotMatch(env.text + JSON.stringify(env.logs), /PRIVATE|private\.example|token=secret/);
+});
+
+test('watchdog records elapsed timeout once and suppresses late diagnostics', () => {
+    const env = harness(); env.open(); const pending = env.requests[0];
+    env.advance(15000);
+    assert.match(diagnosticText(env), /Error: timeout.*Час: 15000 ms/);
+    assert.equal(pending.aborted, true);
+    const saved = diagnosticText(env) + JSON.stringify(env.logs);
+    env.response(formatFixtures.search, pending); env.error(500, 'error', pending);
+    assert.equal(diagnosticText(env) + JSON.stringify(env.logs), saved);
+    assert.equal(detailLogs(env).length, 1);
+});
+
+for (const profile of [false, true]) test('destroy cancels requests without late TV updates: profile=' + profile, () => {
+    const env = harness({ storage: profile ? { lampa_online_token: 'SYNTHETIC_TOKEN' } : {} });
+    const screen = env.open(), pending = env.requests[0]; env.advance(321);
+    screen.destroy();
+    assert.match(detailLogs(env)[0], /error=abort elapsed_ms=321 json=unknown filmix=unknown$/);
+    assert.equal(diagnosticText(env), '');
+    const saved = JSON.stringify(env.logs);
+    env.response(formatFixtures.search, pending); env.advance(20000);
+    assert.equal(JSON.stringify(env.logs), saved);
+    assert.equal(env.timers.size, 0);
+});
+
+test('an external abort is classified without claiming CORS or TLS and remains retryable', () => {
+    const env = harness(); env.open(); env.advance(20); env.requests[0].abort();
+    assert.match(diagnosticText(env), /Error: abort.*Час: 20 ms.*скасовано/);
+    assert.doesNotMatch(diagnosticText(env), /Причину не визначено/);
+    env.enter(1); assert.equal(env.requests.length, 2);
+});
+
+test('Back from a TV diagnostic returns via the existing Activity stack', () => {
+    const env = harness(); env.open(); env.error(0);
+    env.back();
+    assert.equal(env.backward, 1);
+    assert.equal(env.timers.size, 0);
+    assert.equal(env.scrolls[0].destroyed, true);
+});
+
+test('TV diagnostics do not steal focus from an active host menu and resume on return', () => {
+    const env = harness(); env.open(); env.Lampa.Controller.toggle('menu');
+    const saved = env.focus; env.error(0);
+    assert.equal(env.Lampa.Controller.enabled().name, 'menu');
+    assert.equal(env.focus, saved);
+    env.Lampa.Controller.toggle('content');
+    assert.match(env.label(env.focus), /повтору/);
+});
+
+test('diagnostic status and elapsed fields are bounded even for invalid host values', () => {
+    const env = harness(); env.context.performance.now = () => Infinity;
+    env.open(); env.error(9999, 'PRIVATE_KIND');
+    assert.match(diagnosticText(env), /HTTP: 0.*Error: error.*Час: 0 ms/);
+    assert.doesNotMatch(diagnosticText(env) + JSON.stringify(env.logs), /9999|Infinity|PRIVATE_KIND/);
+});
+
+test('diagnostics keep settings, AJAX transport, default host and source registration unchanged', () => {
+    const storage = { lampa_online_token: '', lampa_online_device_id: '0000000000000012', unrelated: true };
+    const snapshot = { ...storage }, env = harness({ storage });
+    const card = fullCard(env).complete(); env.open(); env.error(0); env.enter(1); env.error(500);
+    env.load(); env.ready(); card.complete();
+    assert.deepEqual(storage, snapshot);
+    assert.equal(card.online.length, 1);
+    assert.equal(env.listeners.filter(entry => entry.type === 'full').length, 1);
+    assert.equal(env.settingComponents.length, 1);
+    for (const request of env.requests) {
+        assert.ok(request.params.url.startsWith('https://filmixapp.cyou/api/v2/'));
+        assert.equal(request.params.type, 'GET');
+        assert.equal(request.params.global, false);
+        assert.equal(request.params.headers, undefined);
+    }
+    assert.equal(env.manifests[1].version, '0.1.4');
+});
+
+function fixturePost(name) {
+    const env = harness(); env.open(); env.response(formatFixtures.search); env.enter(1);
+    env.response(formatFixtures[name]); return env;
+}
+
+for (const name of ['movieArray', 'bracketWithoutQualities', 'plainWithoutQualities']) {
+    test('synthetic format fixture plays only declared/supplied media: ' + name, () => {
+        const env = fixturePost(name); env.enter(1);
+        const item = env.Lampa.Player.items[0];
+        assert.ok(item);
+        if (name === 'plainWithoutQualities') {
+            assert.equal(item.url, 'https://media.example/plain.mp4');
+            assert.equal(item.quality, undefined);
+        } else {
+            assert.equal(item.url, 'https://media.example/movie_480.mp4');
+            assert.deepEqual(Object.keys(item.quality), ['480p']);
+        }
+    });
+}
+
+test('movie Object fixture exposes the current parser limitation without inventing playback URLs', () => {
+    const env = fixturePost('movieObject');
+    assert.equal(env.Lampa.Player.items.length, 0);
+    assert.equal(env.rows.length, 1);
+    assert.match(diagnosticText(env), /Етап: post.*HTTP: 200.*Error: none.*JSON: true · Filmix: true/);
+    assert.match(diagnosticText(env), /movie як Object.*лише як Array.*обмеження клієнта/);
+    assert.equal(env.requests.length, 2);
+});
+
+for (const name of ['emptyArray', 'emptyObject', 'blocked']) {
+    test('empty or blocked fixture never launches a player: ' + name, () => {
+        const env = fixturePost(name);
+        assert.equal(env.rows.length, 1);
+        assert.equal(env.Lampa.Player.items.length, 0);
+        assert.equal(env.loading, false);
+    });
+}
+
+for (const name of ['percentWithoutQualities', 'missingStream']) {
+    test('missing declared quality or stream cannot invent a URL: ' + name, () => {
+        const env = fixturePost(name); env.enter(1);
+        assert.equal(env.Lampa.Player.items.length, 0);
+        assert.match(env.notices.at(-1), /Немає доступного/);
+    });
+}
+
+for (const [name, numbers] of [['numericEpisodes', [2,10]], ['arrayEpisodes', [1,2]]]) {
+    test('series fixture keeps numeric episodes and explicit percent-template qualities: ' + name, () => {
+        const env = fixturePost(name); env.enter(1);
+        assert.deepEqual(env.rows.slice(1).map(row => parseInt(env.label(row).match(/Серія (\d+)/)[1])), numbers);
+        env.enter(1);
+        const playlist = env.Lampa.Player.playlists[0];
+        assert.equal(playlist.length, 2);
+        assert.deepEqual(Array.from(playlist, item => item.episode), numbers);
+        assert.ok(playlist.every(item => /_480\.mp4$/.test(item.url)));
+        assert.ok(playlist.every(item => Object.keys(item.quality).join() === '480p'));
+    });
+}

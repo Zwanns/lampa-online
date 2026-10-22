@@ -1,0 +1,15 @@
+{
+  "search": [{ "id": 101, "title": "Synthetic movie", "original_title": "Synthetic original", "year": 2024 }],
+  "profile": { "user_data": { "is_pro": "0", "is_pro_plus": "0" } },
+  "movieArray": { "player_links": { "movie": [{ "translation": "Synthetic voice", "link": "https://media.example/movie_[1080,720,480].mp4" }], "playlist": [] } },
+  "movieObject": { "player_links": { "movie": { "voice1": { "translation": "Synthetic voice", "link": "https://media.example/movie_[1080,720,480].mp4" } }, "playlist": {} } },
+  "emptyArray": { "player_links": { "movie": [], "playlist": [] } },
+  "emptyObject": { "player_links": { "movie": {}, "playlist": {} } },
+  "numericEpisodes": { "player_links": { "playlist": { "1": { "Synthetic voice": { "10": { "link": "https://media.example/s1e10_%s.mp4", "qualities": [720,480] }, "2": { "link": "https://media.example/s1e2_%s.mp4", "qualities": [720,480] } } } } } },
+  "arrayEpisodes": { "player_links": { "playlist": { "-1": { "Synthetic voice": [{ "link": "https://media.example/s1e1_%s.mp4", "qualities": [720,480] }, { "link": "https://media.example/s1e2_%s.mp4", "qualities": [720,480] }] } } } },
+  "bracketWithoutQualities": { "player_links": { "movie": [{ "translation": "Synthetic voice", "link": "https://media.example/movie_[720,480].mp4" }] } },
+  "percentWithoutQualities": { "player_links": { "movie": [{ "translation": "Synthetic voice", "link": "https://media.example/movie_%s.mp4" }] } },
+  "plainWithoutQualities": { "player_links": { "movie": [{ "translation": "Synthetic voice", "link": "https://media.example/plain.mp4" }] } },
+  "blocked": { "player_links": { "movie": [{ "translation": "Заблокировано правообладателем!", "link": "https://media.example/blocked_480.mp4" }] } },
+  "missingStream": { "player_links": { "movie": [{ "translation": "Synthetic voice" }] } }
+}
