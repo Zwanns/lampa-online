@@ -1,4 +1,4 @@
-[← Navigation](07-navigation.md) · [Index](README.md) · **Next: [Manifest & Menu →](09-manifest-menu.md)**
+[← Navigation](07-navigation.md) · [Index](../AGENTS.md) · **Next: [Manifest & Menu →](09-manifest-menu.md)**
 
 ---
 
@@ -166,4 +166,4 @@ function init() {
 
 ---
 
-[← Navigation](07-navigation.md) · [Index](README.md) · **Next: [Manifest & Menu →](09-manifest-menu.md)**
+[← Navigation](07-navigation.md) · [Index](../AGENTS.md) · **Next: [Manifest & Menu →](09-manifest-menu.md)**

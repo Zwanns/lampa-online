@@ -1,4 +1,4 @@
-[← Storage & Network](04-storage-network.md) · [Index](README.md) · **Next: [UI Components →](06-ui-components.md)**
+[← Storage & Network](04-storage-network.md) · [Index](../AGENTS.md) · **Next: [UI Components →](06-ui-components.md)**
 
 ---
 
@@ -124,4 +124,4 @@ The app ships with built-in `ru` and `en`. Additional locales are loaded from ex
 
 ---
 
-[← Storage & Network](04-storage-network.md) · [Index](README.md) · **Next: [UI Components →](06-ui-components.md)**
+[← Storage & Network](04-storage-network.md) · [Index](../AGENTS.md) · **Next: [UI Components →](06-ui-components.md)**

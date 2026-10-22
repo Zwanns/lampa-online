@@ -1,4 +1,4 @@
-[← Lifecycle](02-lifecycle.md) · [Index](README.md) · **Next: [Storage & Network →](04-storage-network.md)**
+[← Lifecycle](02-lifecycle.md) · [Index](../AGENTS.md) · **Next: [Storage & Network →](04-storage-network.md)**
 
 ---
 
@@ -254,4 +254,4 @@ Lampa.Storage.listener.follow('change', (e) => {
 
 ---
 
-[← Lifecycle](02-lifecycle.md) · [Index](README.md) · **Next: [Storage & Network →](04-storage-network.md)**
+[← Lifecycle](02-lifecycle.md) · [Index](../AGENTS.md) · **Next: [Storage & Network →](04-storage-network.md)**

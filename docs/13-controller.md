@@ -1,4 +1,4 @@
-[← Debug](12-debug.md) · [Index](README.md)
+[← Debug](12-debug.md) · [Index](../AGENTS.md)
 
 ---
 
@@ -228,4 +228,4 @@ function MyListComponent(object) {
 
 ---
 
-[← Debug](12-debug.md) · [Index](README.md)
+[← Debug](12-debug.md) · [Index](../AGENTS.md)

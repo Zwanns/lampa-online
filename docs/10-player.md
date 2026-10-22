@@ -1,4 +1,4 @@
-[← Manifest & Menu](09-manifest-menu.md) · [Index](README.md) · **Next: [Pitfalls →](11-pitfalls.md)**
+[← Manifest & Menu](09-manifest-menu.md) · [Index](../AGENTS.md) · **Next: [Pitfalls →](11-pitfalls.md)**
 
 ---
 
@@ -184,4 +184,4 @@ Lampa.Listener.follow('torrent_file', (data) => {
 
 ---
 
-[← Manifest & Menu](09-manifest-menu.md) · [Index](README.md) · **Next: [Pitfalls →](11-pitfalls.md)**
+[← Manifest & Menu](09-manifest-menu.md) · [Index](../AGENTS.md) · **Next: [Pitfalls →](11-pitfalls.md)**

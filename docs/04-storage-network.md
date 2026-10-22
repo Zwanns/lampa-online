@@ -1,4 +1,4 @@
-[← Events](03-events.md) · [Index](README.md) · **Next: [Templates & Localization →](05-templates-lang.md)**
+[← Events](03-events.md) · [Index](../AGENTS.md) · **Next: [Templates & Localization →](05-templates-lang.md)**
 
 ---
 
@@ -176,4 +176,4 @@ network.latest()    // returns the jQuery XHR object of the last request
 
 ---
 
-[← Events](03-events.md) · [Index](README.md) · **Next: [Templates & Localization →](05-templates-lang.md)**
+[← Events](03-events.md) · [Index](../AGENTS.md) · **Next: [Templates & Localization →](05-templates-lang.md)**

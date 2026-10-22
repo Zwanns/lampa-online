@@ -1,4 +1,4 @@
-[← Settings API](08-settings.md) · [Index](README.md) · **Next: [Player Integration →](10-player.md)**
+[← Settings API](08-settings.md) · [Index](../AGENTS.md) · **Next: [Player Integration →](10-player.md)**
 
 ---
 
@@ -181,4 +181,4 @@ if (!window.my_plugin_ready) startMyPlugin()
 
 ---
 
-[← Settings API](08-settings.md) · [Index](README.md) · **Next: [Player Integration →](10-player.md)**
+[← Settings API](08-settings.md) · [Index](../AGENTS.md) · **Next: [Player Integration →](10-player.md)**

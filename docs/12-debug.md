@@ -1,4 +1,4 @@
-[← Pitfalls](11-pitfalls.md) · [Index](README.md) · **Next: [Controller & TV Navigation →](13-controller.md)**
+[← Pitfalls](11-pitfalls.md) · [Index](../AGENTS.md) · **Next: [Controller & TV Navigation →](13-controller.md)**
 
 ---
 
@@ -116,4 +116,4 @@ Understanding when each system is available:
 
 ---
 
-[← Pitfalls](11-pitfalls.md) · [Index](README.md) · **Next: [Controller & TV Navigation →](13-controller.md)**
+[← Pitfalls](11-pitfalls.md) · [Index](../AGENTS.md) · **Next: [Controller & TV Navigation →](13-controller.md)**

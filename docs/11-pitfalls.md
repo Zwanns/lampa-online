@@ -1,4 +1,4 @@
-[← Player Integration](10-player.md) · [Index](README.md) · **Next: [Debug & Logging →](12-debug.md)**
+[← Player Integration](10-player.md) · [Index](../AGENTS.md) · **Next: [Debug & Logging →](12-debug.md)**
 
 ---
 
@@ -186,4 +186,4 @@ function init() {
 
 ---
 
-[← Player Integration](10-player.md) · [Index](README.md) · **Next: [Debug & Logging →](12-debug.md)**
+[← Player Integration](10-player.md) · [Index](../AGENTS.md) · **Next: [Debug & Logging →](12-debug.md)**

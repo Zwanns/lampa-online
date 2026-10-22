@@ -1,4 +1,4 @@
-[← UI Components](06-ui-components.md) · [Index](README.md) · **Next: [Settings API →](08-settings.md)**
+[← UI Components](06-ui-components.md) · [Index](../AGENTS.md) · **Next: [Settings API →](08-settings.md)**
 
 ---
 
@@ -177,4 +177,4 @@ function init() {
 
 ---
 
-[← UI Components](06-ui-components.md) · [Index](README.md) · **Next: [Settings API →](08-settings.md)**
+[← UI Components](06-ui-components.md) · [Index](../AGENTS.md) · **Next: [Settings API →](08-settings.md)**

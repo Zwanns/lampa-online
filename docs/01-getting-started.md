@@ -1,4 +1,4 @@
-[← Index](README.md) · **Next: [Lifecycle →](02-lifecycle.md)**
+[← Index](../AGENTS.md) · **Next: [Lifecycle →](02-lifecycle.md)**
 
 ---
 
@@ -151,4 +151,4 @@ console.log('App version:', Lampa.Manifest.app_version) // "3.2.8"
 
 ---
 
-[← Index](README.md) · **Next: [Lifecycle →](02-lifecycle.md)**
+[← Index](../AGENTS.md) · **Next: [Lifecycle →](02-lifecycle.md)**

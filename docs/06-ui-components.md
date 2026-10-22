@@ -1,4 +1,4 @@
-[← Templates & Localization](05-templates-lang.md) · [Index](README.md) · **Next: [Navigation →](07-navigation.md)**
+[← Templates & Localization](05-templates-lang.md) · [Index](../AGENTS.md) · **Next: [Navigation →](07-navigation.md)**
 
 ---
 
@@ -202,4 +202,4 @@ Lampa.Controller.windowTop() // top window {name, below} or false
 
 ---
 
-[← Templates & Localization](05-templates-lang.md) · [Index](README.md) · **Next: [Navigation →](07-navigation.md)**
+[← Templates & Localization](05-templates-lang.md) · [Index](../AGENTS.md) · **Next: [Navigation →](07-navigation.md)**

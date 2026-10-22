@@ -1,4 +1,4 @@
-[← Getting Started](01-getting-started.md) · [Index](README.md) · **Next: [Events →](03-events.md)**
+[← Getting Started](01-getting-started.md) · [Index](../AGENTS.md) · **Next: [Events →](03-events.md)**
 
 ---
 
@@ -159,4 +159,4 @@ this.destroy = function() {
 
 ---
 
-[← Getting Started](01-getting-started.md) · [Index](README.md) · **Next: [Events →](03-events.md)**
+[← Getting Started](01-getting-started.md) · [Index](../AGENTS.md) · **Next: [Events →](03-events.md)**
