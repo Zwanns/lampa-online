@@ -10,6 +10,9 @@ const { spawnSync } = require('node:child_process');
 const pluginPath = path.join(__dirname, '..', 'lampa-online.js');
 const source = fs.readFileSync(pluginPath, 'utf8');
 const COMPONENT = 'lampa_online_filmix_screen';
+const PROVIDERS = 'lampa_online_provider_screen';
+const REZKA = 'lampa_online_rezka_screen';
+const rezka = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'rezka-formats.json'), 'utf8'));
 
 function harness(options = {}) {
     let now = 0, nextTimer = 0, active = null, activeName = '';
@@ -199,8 +202,8 @@ function harness(options = {}) {
             now += ms;
             for (const [id, timer] of [...timers]) if (timer.at <= now && timers.delete(id)) timer.callback();
         },
-        open(movie = { title: 'Тест & кіно', release_date: '2020-01-01' }) {
-            screen = new components[COMPONENT]({ movie });
+        open(movie = { title: 'Тест & кіно', release_date: '2020-01-01' }, component = COMPONENT) {
+            screen = new components[component]({ movie });
             screen.activity = { loader(value) { env.loading = value; } };
             screen.create(); screen.start();
             return screen;
@@ -304,10 +307,10 @@ test('ready listener and all registrations are unique across reloads', () => {
     env.ready(); env.ready(); env.load();
     assert.equal(env.listeners.length, 1);
     assert.equal(env.listeners[0].type, 'full');
-    assert.equal(Object.keys(env.components).length, 1);
+    assert.equal(Object.keys(env.components).length, 3);
     assert.equal(env.manifests.length, 2);
     assert.equal(env.manifests[0], env.unrelatedPlugin);
-    assert.equal(env.manifests[1].version, '0.1.4');
+    assert.equal(env.manifests[1].version, '0.1.5');
     assert.equal(env.settingComponents.length, 1);
     assert.equal(env.settings.length, 4);
 });
@@ -332,7 +335,7 @@ test('context menu launches the registered component, including missing card fie
     assert.match(manifest.onContextMenu().name, /ZebMod/);
     manifest.onContextLauch({ original_name: 'Original' });
     manifest.onContextLauch();
-    assert.equal(env.pushes[0].component, COMPONENT);
+    assert.equal(env.pushes[0].component, PROVIDERS);
     assert.equal(env.pushes[0].search, 'Original');
     assert.equal(env.pushes[1].search, '');
 });
@@ -813,7 +816,7 @@ test('source has the standard classes, play SVG, name and remote enter binding',
     assert.match(card.online[0].html, /<span>ZebMod<\/span>/);
     card.online[0].trigger('hover:enter');
     assert.equal(env.pushes.length, 1);
-    assert.equal(env.pushes[0].component, COMPONENT);
+    assert.equal(env.pushes[0].component, PROVIDERS);
     assert.ok(env.components[env.pushes[0].component]);
 });
 
@@ -1048,12 +1051,13 @@ test('other sources keep order, handlers and availability including sources adde
 
 const INSTALL_URL = 'https://zwanns.github.io/zeb.js';
 
-test('public manifest is ZebMod v0.1.4 with the original component identifier', () => {
+test('public manifest is ZebMod v0.1.5 with provider picker and preserved Filmix identifier', () => {
     const env = harness(), manifest = env.manifests[1];
     assert.equal(manifest.name, 'ZebMod');
-    assert.equal(manifest.version, '0.1.4');
+    assert.equal(manifest.version, '0.1.5');
     assert.equal(manifest.type, 'video');
-    assert.equal(manifest.component, COMPONENT);
+    assert.equal(manifest.component, PROVIDERS);
+    assert.ok(env.components[COMPONENT]);
     assert.equal(env.context.__lampa_online_loaded, true);
     assert.equal(env.context.__zebmod_loaded, undefined);
     assert.equal(env.manifests[0], env.unrelatedPlugin);
@@ -1444,7 +1448,7 @@ test('diagnostics keep settings, AJAX transport, default host and source registr
         assert.equal(request.params.global, false);
         assert.equal(request.params.headers, undefined);
     }
-    assert.equal(env.manifests[1].version, '0.1.4');
+    assert.equal(env.manifests[1].version, '0.1.5');
 });
 
 function fixturePost(name) {
@@ -1505,3 +1509,319 @@ for (const [name, numbers] of [['numericEpisodes', [2,10]], ['arrayEpisodes', [1
         assert.ok(playlist.every(item => Object.keys(item.quality).join() === '480p'));
     });
 }
+
+// Rezka tests use only synthetic HTML/JSON. They do not assert live availability.
+const rezkaCard = { title: 'Fixture Film', original_title: 'Original Film', release_date: '2024-01-02', extra: { keep: true } };
+function openRezka(options, card = rezkaCard) {
+    const env = harness(options);
+    env.screen = env.open(card, REZKA);
+    return env;
+}
+function rezkaVoices(detail = rezka.movie) {
+    const env = openRezka(); env.response(rezka.search); env.enter(1); env.response(detail); return env;
+}
+function rezkaQualities() {
+    const env = rezkaVoices(); env.enter(1); env.response(rezka.streams); return env;
+}
+
+test('provider picker lists Rezka first and Filmix second without starting a request', () => {
+    const env = harness(); env.open(rezkaCard, PROVIDERS);
+    assert.equal(env.requests.length, 0);
+    assert.equal(env.loading, false);
+    assert.equal(env.rows.length, 3);
+    assert.match(env.label(env.rows[1]), /^Rezka/);
+    assert.match(env.label(env.rows[1]), /Експериментальний/);
+    assert.equal(env.label(env.rows[2]), 'Filmix');
+    env.enter(1); env.enter(2);
+    assert.deepEqual(env.pushes.map(x => x.component), [REZKA, COMPONENT]);
+    for (const push of env.pushes) assert.equal(push.movie, rezkaCard);
+});
+
+test('source and context picker preserve complete card through both provider transitions', () => {
+    const env = harness(), card = fullCard(env, rezkaCard).complete();
+    card.online[0].trigger('hover:enter');
+    env.manifests[1].onContextLauch(rezkaCard);
+    assert.equal(env.pushes.length, 2);
+    for (const push of env.pushes) { assert.equal(push.component, PROVIDERS); assert.equal(push.movie, rezkaCard); }
+    env.open(env.pushes[0].movie, PROVIDERS); env.enter(2);
+    env.open(env.pushes.at(-1).movie, COMPONENT);
+    assert.match(env.requests[0].params.url, /^https:\/\/filmixapp\.cyou\/api\/v2\/search/);
+    env.screen = env.open(rezkaCard, REZKA);
+    assert.equal(env.requests.at(-1).params.url, 'https://rezka.ag/engine/ajax/search.php');
+});
+
+test('Rezka search uses guest form POST with owned AJAX and no Filmix configuration leakage', () => {
+    const env = openRezka({ storage: { lampa_online_token: 'PRIVATE_TOKEN', lampa_online_proxy: 'https://private.example/', lampa_online_device_id: '00001234' } });
+    const p = env.requests[0].params;
+    assert.equal(p.type, 'POST'); assert.equal(p.data.q, rezkaCard.title);
+    assert.match(p.contentType, /^application\/x-www-form-urlencoded/);
+    assert.equal(p.dataType, 'text'); assert.equal(p.global, false); assert.equal(p.crossDomain, true);
+    assert.equal(p.xhrFields.withCredentials, false); assert.equal(p.headers, undefined);
+    assert.equal(p.timeout, 15000);
+    assert.doesNotMatch(JSON.stringify(p), /PRIVATE_TOKEN|private\.example|00001234/);
+    assert.equal(env.settings.length, 4);
+    assert.equal(env.storage.lampa_online_device_id, '00001234');
+});
+
+test('Rezka search sorts exact title and year ahead of mismatched year, filters foreign and duplicate results', () => {
+    const env = openRezka(); env.response(rezka.search);
+    assert.equal(env.rows.length, 4); // Back, two results, manual original-title search
+    assert.match(env.label(env.rows[1]), /2024/); assert.match(env.label(env.rows[2]), /2019/);
+    assert.equal(env.requests.length, 1); assert.equal(env.Lampa.Player.items.length, 0);
+    env.enter(1);
+    assert.equal(env.requests.at(-1).params.url, 'https://rezka.ag/films/drama/13-film.html');
+    assert.equal(env.requests.at(-1).params.type, 'GET');
+});
+
+test('Rezka compares original title/original name and supports catalog result markup', () => {
+    const env = openRezka(undefined, { name: 'Localized', original_name: 'Fixture Series', first_air_date: '2023-05-06' });
+    env.response(rezka.catalogSearch); assert.match(env.text, /Fixture Series.*2023/);
+    env.enter(1); assert.match(env.requests.at(-1).params.url, /15-series\.html$/);
+});
+
+test('Rezka empty recognized search offers a manual original-title query and retry without automatic fallback', () => {
+    const env = openRezka(); env.response(rezka.emptySearch);
+    assert.equal(env.requests.length, 1); assert.equal(env.loading, false);
+    assert.match(env.text, /error: empty/); assert.match(env.text, /Нічого не знайдено/);
+    env.enter(1); assert.equal(env.requests.at(-1).params.data.q, 'Original Film');
+    env.response(rezka.emptySearch); env.back();
+    assert.equal(env.requests.length, 2); assert.equal(env.backward, 0);
+});
+
+test('Rezka missing card title finishes without a network request', () => {
+    const env = openRezka(undefined, {});
+    assert.equal(env.requests.length, 0); assert.equal(env.loading, false);
+    assert.match(env.text, /відсутня назва/);
+});
+
+for (const [body, kind] of [[rezka.challenge, 'blocked'], [rezka.login, 'auth'], [rezka.restricted, 'restricted'], ['<html>unknown PRIVATE_BODY</html>', 'parser']]) {
+    test('Rezka rejects a 200 response with ' + kind, () => {
+        const env = openRezka(); env.advance(369); env.response(body);
+        assert.match(env.text, new RegExp('error: ' + kind));
+        assert.match(env.text, /HTTP: 200/); assert.match(env.text, /369 ms/);
+        assert.match(env.text, /provider: rezka/); assert.match(env.text, /stage: search/);
+        assert.match(env.text, /response type: html/); assert.doesNotMatch(env.text, /PRIVATE_BODY/);
+        assert.equal(env.requests.length, 1); assert.equal(env.loading, false);
+        assert.equal(env.Lampa.Player.items.length, 0); assert.equal(env.context.mustNeverExecute, undefined);
+    });
+}
+
+for (const [status, kind] of [[0, 'error'], [401, 'auth'], [403, 'blocked'], [404, 'missing'], [429, 'blocked'], [500, 'server']]) {
+    test('Rezka HTTP diagnostic and explicit retry: ' + status, () => {
+        const env = openRezka(); env.error(status);
+        assert.match(env.text, new RegExp('HTTP: ' + status)); assert.match(env.text, new RegExp('error: ' + kind));
+        assert.doesNotMatch(env.text + JSON.stringify(env.logs), /PRIVATE_RESPONSE|PRIVATE_MESSAGE/);
+        assert.equal(env.loading, false); env.enter(1);
+        assert.equal(env.requests.length, 2); assert.equal(env.loading, true);
+    });
+}
+
+test('Rezka parses detail voices and numeric request fields without executing scripts', () => {
+    const env = rezkaVoices();
+    assert.match(env.text, /Fixture Film/); assert.match(env.text, /Українська & Original/);
+    assert.equal(env.rows.length, 3); assert.equal(env.context.mustNeverExecute, undefined);
+    assert.equal(env.Lampa.Player.items.length, 0); env.enter(1);
+    const p = env.requests.at(-1).params;
+    assert.equal(p.url, 'https://rezka.ag/ajax/get_cdn_series/'); assert.equal(p.type, 'POST');
+    assert.deepEqual(JSON.parse(JSON.stringify(p.data)), { id: '13', translator_id: '7', favs: 'synthetic_favs', action: 'get_movie', is_camrip: '0', is_ads: '1', is_director: '0' });
+    assert.doesNotMatch(env.text + JSON.stringify(env.logs), /synthetic_favs/);
+});
+
+for (const detail of ['<h1>Missing init</h1>', '<script>x.initCDNMoviesEvents(13,7,0,0,0,{});</script>', '<h1>Invalid</h1><script>x.initCDNMoviesEvents(0,7,0,0,0,{});</script>']) {
+    test('Rezka requires title and positive static material/translator identifiers: ' + detail.slice(0, 25), () => {
+        const env = rezkaVoices(detail); assert.match(env.text, /stage: detail/); assert.match(env.text, /error: parser/);
+        assert.equal(env.Lampa.Player.items.length, 0);
+    });
+}
+
+test('Rezka numeric default translator is usable without a translator list', () => {
+    const env = rezkaVoices('<h1>Default</h1><script>x.initCDNMoviesEvents(13,7,0,0,1,{});</script>');
+    assert.equal(env.rows.length, 2); assert.match(env.text, /Озвучення сайту/);
+    env.enter(1); assert.equal(env.requests.at(-1).params.data.is_director, '1');
+});
+
+test('Rezka displays remote strings as text without HTML/JS insertion', () => {
+    const env = openRezka(); env.response(rezka.search.replace('Fixture Film</span>', '&lt;img src=x onerror=PRIVATE_SCRIPT&gt;</span>'));
+    assert.match(env.text, /<img src=x onerror=PRIVATE_SCRIPT>/);
+    assert.equal(env.context.PRIVATE_SCRIPT, undefined);
+    assert.ok(env.rows.every(row => !row.html.includes('PRIVATE_SCRIPT')));
+    assert.doesNotMatch(JSON.stringify(env.logs), /PRIVATE_SCRIPT/);
+});
+
+test('Rezka film qualities are manually selected and Player receives only actual HTTPS media', () => {
+    const env = rezkaQualities(); assert.equal(env.rows.length, 3);
+    assert.match(env.label(env.rows[1]), /^720p$/); assert.match(env.label(env.rows[2]), /^1080p$/);
+    assert.equal(env.Lampa.Player.items.length, 0); env.enter(2);
+    const item = env.Lampa.Player.items[0];
+    assert.equal(item.url, 'https://media.example/fixture-1080.m3u8?synthetic=1');
+    assert.equal(item.movie, rezkaCard); assert.equal(env.Lampa.Player.playlists[0].length, 1);
+    env.returnFromPlayer(); assert.equal(env.focus, env.rows[2]);
+});
+
+test('Rezka series chooses voice then numeric season/episode and never guesses next links', () => {
+    const env = rezkaVoices(rezka.series); env.enter(2);
+    assert.equal(env.requests.at(-1).params.data.action, 'get_episodes');
+    assert.equal(env.requests.at(-1).params.data.translator_id, '8');
+    env.response(rezka.episodes);
+    assert.equal(env.label(env.rows[1]), 'Season 2'); assert.equal(env.label(env.rows[2]), 'Season 10');
+    env.enter(1);
+    assert.match(env.label(env.rows[1]), /Episode 2/); assert.match(env.label(env.rows[2]), /Episode 10/);
+    env.enter(2);
+    const form = env.requests.at(-1).params.data;
+    assert.equal(form.action, 'get_stream'); assert.equal(form.season, '2'); assert.equal(form.episode, '10');
+    env.response(rezka.streams); env.enter(1);
+    assert.equal(env.Lampa.Player.items[0].episode, 10); assert.equal(env.Lampa.Player.items[0].season, 2);
+    assert.equal(env.Lampa.Player.playlists[0].length, 1); assert.doesNotThrow(() => JSON.parse(env.Lampa.Player.serialized));
+});
+
+for (const [body, kind] of [[{ url: '#encoded-private' }, 'encoded'], [{ url: '' }, 'empty_stream'], [{ success: false, message: 'PRIVATE_ERROR' }, 'rejected'], [{ premium_content: true }, 'restricted'], [{ missing: 'PRIVATE_BODY' }, 'parser'], ['{bad PRIVATE_BODY', 'parser']]) {
+    test('Rezka stream response fails closed: ' + kind + '/' + JSON.stringify(body).slice(0, 30), () => {
+        const env = rezkaVoices(); env.enter(1); env.response(body);
+        assert.match(env.text, /stage: stream/); assert.match(env.text, new RegExp('error: ' + kind));
+        assert.equal(env.Lampa.Player.items.length, 0);
+        assert.doesNotMatch(env.text + JSON.stringify(env.logs), /PRIVATE_BODY|PRIVATE_ERROR|encoded-private/);
+    });
+}
+
+for (const url of ['http://media.example/a.mp4', 'javascript:alert(1)', 'https://user:pass@media.example/a.mp4', 'https://media..example/a.mp4', 'https://media.example:8080/a.mp4', 'https://media.example/a_[720,1080].mp4', 'https://media.example/a_%s.mp4', 'https://media.example/a.html', 'https://media.example/a.mp4#x', 'https://media.example/a.mp4?x=%0aHEADER']) {
+    test('Rezka rejects unsafe or unsupported media URL: ' + url, () => {
+        const env = rezkaVoices(); env.enter(1); env.response({ url });
+        assert.match(env.text, /error: empty_stream/); assert.equal(env.Lampa.Player.items.length, 0);
+    });
+}
+
+test('Rezka accepts a plain actual MP4 without inventing a resolution and quality alternatives stay distinct', () => {
+    const env = rezkaVoices(); env.enter(1);
+    env.response({ url: 'https://media.example/file.mp4?signature=synthetic' });
+    assert.match(env.text, /Якість джерела/); assert.doesNotMatch(env.text, /720p|1080p/);
+    env.back(); env.enter(1);
+    env.response({ url: '[720p]https://media.example/a.mp4 or https://media.example/a.m3u8' });
+    assert.equal(env.rows.length, 3); env.enter(2); assert.match(env.Lampa.Player.items[0].url, /a.m3u8$/);
+});
+
+test('Rezka episodes reject malformed and empty JSON without constructing episode links', () => {
+    for (const response of [{ seasons: '', episodes: '' }, { seasons: 1 }, '<html>unexpected</html>']) {
+        const env = rezkaVoices(rezka.series); env.enter(1); env.response(response);
+        assert.match(env.text, /stage: episodes/); assert.match(env.text, /error: (empty|parser)/);
+        assert.equal(env.Lampa.Player.items.length, 0);
+    }
+});
+
+test('Rezka timeout aborts owned XHR and suppresses late callbacks; retry has a fresh timer', () => {
+    const env = openRezka(), pending = env.requests[0]; env.advance(15001);
+    assert.match(env.text, /error: timeout/); assert.equal(pending.aborted, true); assert.equal(env.timers.size, 0);
+    const before = env.text; env.response(rezka.search, pending); assert.equal(env.text, before);
+    env.enter(1); assert.equal(env.requests.length, 2); env.advance(21); env.error(403);
+    assert.match(env.text, /21 ms/); assert.equal(env.timers.size, 0);
+});
+
+test('Rezka synchronous transport errors show sanitized retry diagnostics', () => {
+    const env = openRezka({ ajaxThrows: true });
+    assert.match(env.text, /error: error/); assert.equal(env.loading, false); assert.equal(env.timers.size, 0);
+    assert.doesNotMatch(env.text + JSON.stringify(env.logs), /synthetic transport failure/);
+});
+
+test('Rezka Back cancels detail, restores cached search selection and ignores late detail', () => {
+    const env = openRezka(); env.response(rezka.search); env.enter(2);
+    const pending = env.requests.at(-1); env.back();
+    assert.equal(pending.aborted, true); assert.match(env.text, /Результати пошуку/);
+    assert.equal(env.focus, env.rows[2]); assert.equal(env.loading, false);
+    const before = env.text; env.response(rezka.movie, pending); assert.equal(env.text, before);
+    env.back(); assert.equal(env.backward, 1);
+});
+
+test('Rezka series Back unwinds qualities, episodes, seasons, voices and search with restored focus', () => {
+    const env = rezkaVoices(rezka.series); env.enter(2); env.response(rezka.episodes); env.enter(1); env.enter(2); env.response(rezka.streams);
+    env.back(); assert.match(env.text, /Episode 10/); assert.equal(env.focus, env.rows[2]);
+    env.back(); assert.match(env.text, /Season 10/); assert.equal(env.focus, env.rows[1]);
+    env.back(); assert.match(env.text, /Озвучення/); assert.equal(env.focus, env.rows[2]);
+    env.back(); assert.match(env.text, /Результати пошуку/);
+    assert.equal(env.requests.length, 4);
+});
+
+test('Rezka arrows delegate to Navigator, menu focus is preserved and stop/start does not repeat search', () => {
+    const env = openRezka(), screen = env.screen, controller = env.Lampa.Controller.enabled().controller;
+    controller.up(); controller.down(); controller.right(); controller.left();
+    assert.deepEqual(env.moves, ['up', 'down', 'right']);
+    assert.equal(env.Lampa.Controller.enabled().name, 'menu');
+    env.response(rezka.search); assert.equal(env.Lampa.Controller.enabled().name, 'menu');
+    screen.stop(); screen.start(); assert.equal(env.requests.length, 1); assert.equal(env.collection.length, 4);
+});
+
+test('Rezka destroy is idempotent, aborts, clears handlers/timers and never steals another controller', () => {
+    const env = openRezka(), screen = env.screen, rows = env.rows.slice(), controller = env.Lampa.Controller.enabled().controller, pending = env.requests[0];
+    env.Lampa.Controller.toggle('menu'); const active = env.Lampa.Controller.enabled().controller;
+    screen.destroy(); screen.destroy(); screen.create(); screen.start();
+    assert.equal(pending.aborted, true); assert.equal(env.timers.size, 0); assert.equal(env.loading, false);
+    assert.ok(rows.every(row => Object.keys(row.events).length === 0)); assert.equal(controller.invisible, true);
+    env.response(rezka.search, pending); assert.equal(env.Lampa.Controller.enabled().controller, active);
+    assert.equal(env.requests.length, 1);
+});
+
+test('provider picker Back/destroy/reload preserve one source, three components and old settings', () => {
+    const storage = { lampa_online_api_url: 'https://api.example/api/v2/', lampa_online_token: 'SYNTHETIC', lampa_online_proxy: '', lampa_online_device_id: '00000012' };
+    const env = harness({ storage }), original = JSON.stringify(storage), card = fullCard(env).complete();
+    const screen = env.open(rezkaCard, PROVIDERS); const oldRows = env.rows.slice();
+    env.enter(2); screen.stop(); screen.start(); assert.equal(env.focus, env.rows[2]);
+    env.back(); assert.equal(env.backward, 1); assert.ok(oldRows.every(row => Object.keys(row.events).length === 0));
+    for (let i = 0; i < 10; i++) { env.load(); card.complete(); }
+    assert.equal(Object.keys(env.components).length, 3); assert.equal(env.manifests.length, 2);
+    assert.equal(card.container.children.filter(x => /view--lampa-online/.test(x.html)).length, 1);
+    assert.equal(env.settings.length, 4); assert.equal(JSON.stringify(storage), original);
+});
+
+test('Rezka Player failure is distinct and late Player callbacks after destroy are inert', () => {
+    const env = rezkaQualities(); env.Lampa.Player.throwOnPlay = true; env.enter(1);
+    assert.match(env.text, /error: player/); assert.match(env.text, /transport: Lampa.Player/);
+    env.Lampa.Player.throwOnPlay = false; env.enter(1);
+    const item = env.Lampa.Player.items[0]; assert.ok(item);
+    env.screen.destroy(); const count = env.notices.length; item.error(); assert.equal(env.notices.length, count);
+});
+
+test('Rezka original-title equality affects ranking even when the display title is localized', () => {
+    const env = openRezka(undefined, { title: 'Original Film', year: 2024 });
+    env.response('<li><a href="/films/1-other.html"><span class="enty">Other</span> Other (2024)</a></li>' +
+        '<li><a href="/films/2-original.html"><span class="enty">Localized</span> Original Film (2024)</a></li>');
+    assert.match(env.label(env.rows[1]), /Localized/);
+});
+
+test('Rezka never navigates to injected unsafe detail addresses', () => {
+    const env = openRezka();
+    const urls = ['http://rezka.ag/1-film.html','//evil.example/1-film.html','https://rezka.ag.evil.example/1-film.html','https://rezka.ag@evil.example/1-film.html','javascript:alert(1)','https://rezka.ag/1-film.html?private=x','https://rezka.ag/1-film.html#x'];
+    env.response('<ul>' + urls.map(url => '<li><a href="' + url + '"><span class="enty">Bad</span></a></li>').join('') + '</ul>');
+    assert.match(env.text, /Нічого не знайдено/); assert.equal(env.requests.length, 1);
+});
+
+test('Rezka Back during initial search aborts and closes without late UI changes', () => {
+    const env = openRezka(), request = env.requests[0]; env.back();
+    assert.equal(env.backward, 1); assert.equal(request.aborted, true); assert.equal(env.timers.size, 0);
+    const text = env.text; env.response(rezka.search, request); assert.equal(env.text, text);
+});
+
+for (const stage of ['episodes','stream']) {
+    test('Rezka Back during ' + stage + ' aborts and restores the previous page', () => {
+        const env = rezkaVoices(stage === 'episodes' ? rezka.series : rezka.movie); env.enter(1);
+        const request = env.requests.at(-1); env.back();
+        assert.equal(request.aborted, true); assert.match(env.text, /Озвучення/);
+        assert.equal(env.focus, env.rows[1]); assert.equal(env.loading, false);
+        const text = env.text; env.response(stage === 'episodes' ? rezka.episodes : rezka.streams, request);
+        assert.equal(env.text, text); assert.equal(env.Lampa.Player.items.length, 0);
+    });
+}
+
+test('Rezka repeat open uses the new card and does not leak previous results or callbacks', () => {
+    const env = openRezka(), old = env.requests[0]; env.screen.destroy();
+    const card = { name: 'Another Series', original_name: 'Another Original', first_air_date: '2023-01-01' };
+    env.screen = env.open(card, REZKA); env.response(rezka.search, old);
+    assert.equal(env.requests.at(-1).params.data.q, 'Another Series');
+    assert.doesNotMatch(env.text, /Fixture Film/);
+    env.response(rezka.catalogSearch); assert.match(env.text, /Fixture Series/);
+    env.screen.destroy(); assert.equal(env.timers.size, 0);
+});
+
+test('Rezka malformed HTTP/time metadata is bounded and unknown error text remains private', () => {
+    const env = openRezka(); env.context.performance.now = () => Infinity;
+    env.error(9999, 'PRIVATE_ERROR');
+    assert.match(env.text, /HTTP: 0/); assert.match(env.text, /elapsed: 0 ms/);
+    assert.match(env.text, /error: error/); assert.doesNotMatch(env.text, /PRIVATE_ERROR/);
+});

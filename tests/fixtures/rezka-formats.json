@@ -1,0 +1,17 @@
+{
+  "note": "Synthetic public-contract examples only. No live Rezka content, cookies, secrets or working stream addresses.",
+  "search": "<ul><li><a href=\"https://rezka.ag/films/drama/12-old.html\"><span class=\"enty\">Fixture Film</span> Original Film (2019)</a></li><li><a href=\"/films/drama/13-film.html\"><span class=\"enty\">Fixture Film</span> Original Film (2024)</a></li><li><a href=\"https://evil.example/14-film.html\"><span class=\"enty\">External</span> (2024)</a></li><li><a href=\"/films/drama/13-film.html\"><span class=\"enty\">Duplicate</span></a></li></ul>",
+  "catalogSearch": "<div class=\"b-content__inline_item-link\"><a href=\"/series/drama/15-series.html\">Fixture Series</a><div>2023, serial</div></div>",
+  "movie": "<h1>Fixture Film (2024)</h1><ul id=\"translators-list\"><li class=\"b-translator__item\" data-translator_id=\"7\" data-camrip=\"0\" data-ads=\"1\" data-director=\"0\" title=\"Українська &amp; Original\">Audio</li><li class=\"b-translator__item\" data-translator_id=\"8\">Original</li></ul><input type=\"hidden\" id=\"ctrl_favs\" value=\"synthetic_favs\"><script>window.mustNeverExecute = true; app.initCDNMoviesEvents(13, 7, 0, 1, 0, {});</script>",
+  "series": "<h1>Fixture Series (2023)</h1><script>app.initCDNSeriesEvents(15, 7, 1, 1, {});</script><ul><li class=\"b-translator__item\" data-translator_id=\"7\">Українська</li><li class=\"b-translator__item\" data-translator_id=\"8\">Original</li></ul>",
+  "episodes": {
+    "success": true,
+    "seasons": "<ul id=\"simple-seasons-tabs\"><li class=\"b-simple_season__item\" data-tab_id=\"10\">Season 10</li><li class=\"b-simple_season__item\" data-tab_id=\"2\">Season 2</li></ul>",
+    "episodes": "<div id=\"simple-episodes-tabs\"><ul><li class=\"b-simple_episode__item\" data-season_id=\"2\" data-episode_id=\"10\">Episode 10</li><li class=\"b-simple_episode__item\" data-season_id=\"2\" data-episode_id=\"2\">Episode 2</li><li class=\"b-simple_episode__item\" data-season_id=\"10\" data-episode_id=\"1\">Episode 1</li></ul></div>"
+  },
+  "streams": { "success": true, "url": "[720p]https://media.example/fixture-720.mp4,[1080p]https://media.example/fixture-1080.m3u8?synthetic=1" },
+  "emptySearch": "<div class=\"b-search__notfound\">Ничего не найдено</div>",
+  "challenge": "<!doctype html><html><head><title>Проверяем, что вы не бот!</title></head><body><script src=\"/.within.website/challenge.js\"></script></body></html>",
+  "login": "<form id=\"login-required\"><input type=\"password\" name=\"password\"></form>",
+  "restricted": "<div class=\"b-player__restricted__block_message\">Access restricted</div>"
+}

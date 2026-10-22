@@ -1,7 +1,7 @@
 
-/* ZebMod v0.1.4 diagnostic (formerly Lampa Online) — Filmix provider preview.
- * Standalone ES5 plugin. The Filmix API/network is not verified on user device.
- * Additional providers intentionally not implemented yet.
+/* ZebMod v0.1.5 experimental (formerly Lampa Online).
+ * Standalone ES5 plugin. Rezka contracts are static-source/fixture verified only.
+ * Live Rezka returned an anti-bot page; no challenge or authorization bypass.
  */
 (function () {
     'use strict';
@@ -9,6 +9,9 @@
     var FLAG = '__lampa_online_loaded';
     var PREFIX = 'lampa_online_';
     var COMPONENT = 'lampa_online_filmix_screen';
+    var PROVIDERS_COMPONENT = 'lampa_online_provider_screen';
+    var REZKA_COMPONENT = 'lampa_online_rezka_screen';
+    var REZKA_ORIGIN = 'https://rezka.ag';
     var API_DEFAULT = 'https://filmixapp.cyou/api/v2/';
 
     if (window[FLAG]) return;
@@ -685,10 +688,374 @@
         this.render = function () { return scroll.render(); };
     }
 
+    // Conservative, inert extraction of known markup. No DOM insertion, eval or
+    // page scripts; unfamiliar/encoded formats fail closed in this preview.
+    function rezkaText(value) {
+        return String(value || '').replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, '')
+            .replace(/<style\b[^>]*>[\s\S]*?<\/style\s*>/gi, '').replace(/<[^>]*>/g, ' ')
+            .replace(/&#(x[0-9a-f]+|\d+);|&(amp|quot|apos|lt|gt|nbsp);/gi, function (all, code, named) {
+                if (code) {
+                    var n = code.charAt(0).toLowerCase() === 'x' ? parseInt(code.slice(1), 16) : parseInt(code, 10);
+                    return n > 0 && n <= 65535 ? String.fromCharCode(n) : '';
+                }
+                return { amp: '&', quot: '"', apos: "'", lt: '<', gt: '>', nbsp: ' ' }[named.toLowerCase()];
+            }).replace(/\s+/g, ' ').trim().slice(0, 500);
+    }
+    function rezkaAttrs(text) {
+        var attrs = {}, re = /([a-z_][\w:-]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/gi, m;
+        while ((m = re.exec(text))) attrs[m[1].toLowerCase()] = rezkaText(m[2] != null ? m[2] : (m[3] != null ? m[3] : m[4]));
+        return attrs;
+    }
+    function rezkaBlocks(html, tag, callback) {
+        var re = new RegExp('<' + tag + '\\b([^>]*)>([\\s\\S]*?)<\\/' + tag + '\\s*>', 'gi'), m;
+        while ((m = re.exec(html))) callback(rezkaAttrs(m[1]), m[2]);
+    }
+    function rezkaClass(attrs, name) { return (' ' + (attrs['class'] || '') + ' ').indexOf(' ' + name + ' ') !== -1; }
+    function rezkaId(value) { return /^[1-9]\d{0,9}$/.test(String(value || '')) ? String(value) : ''; }
+    function rezkaDetailUrl(value) {
+        value = String(value || '');
+        if (/^\/(?!\/)/.test(value)) value = REZKA_ORIGIN + value;
+        return /^https:\/\/rezka\.ag\/(?:[a-z0-9_-]+\/)*[a-z0-9_-]+\.html$/i.test(value) ? value : '';
+    }
+    function rezkaMediaUrl(value) {
+        // Only actual HTTPS MP4/HLS addresses; no templates, credentials or downgrade.
+        return typeof value === 'string' && /^https:\/\/(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}(?::443)?\/[^\s<>"'\\\[\]#]*\.(?:mp4|m3u8)(?:\?[^\s<>"'\\\[\]#]*)?$/i.test(value) &&
+            !/%s|%(?:0[0-9a-f]|1[0-9a-f]|7f)/i.test(value) ? value : '';
+    }
+    function rezkaGate(html) {
+        if (/captcha|проверяем,?\s*что вы не бот|verify you are human|\.within\.website\/|cf-chl-|challenge-platform/i.test(html)) return 'blocked';
+        if (/b-player__restricted|premium_content\s*["']?\s*:\s*true/i.test(html)) return 'restricted';
+        if (/<form\b[^>]*(?:id|class)=["'][^"']*(?:login|auth)[^"']*["']/i.test(html) && !/initCDN(?:Movies|Series)Events|b-content__inline_item-link|class=["']enty["']/i.test(html)) return 'auth';
+        return '';
+    }
+    function rezkaNormalize(value) { return rezkaText(value).toLowerCase().replace(/[^a-z0-9\u00c0-\u024f\u0400-\u04ff]+/g, ' ').trim(); }
+    function rezkaSearch(html, movie) {
+        var result = [], seen = {}, recognized = false;
+        function candidate(attrs, content) {
+            var link = '', name = '', alternate = '', info = rezkaText(content);
+            rezkaBlocks(content, 'a', function (a, inner) {
+                if (!link) link = rezkaDetailUrl(a.href);
+                if (!name && !/<(?:span|div)\b[^>]*class=["']enty["']/i.test(inner)) name = rezkaText(inner);
+                var enty = inner.match(/<(?:span|div)\b[^>]*class=["']enty["'][^>]*>([\s\S]*?)<\/(?:span|div)>/i);
+                if (enty) {
+                    name = rezkaText(enty[1]);
+                    alternate = rezkaText(inner.replace(enty[0], '')).replace(/\s*\((?:19|20)\d{2}\).*$/, '').trim();
+                }
+            });
+            if (!link || !name || seen[link]) return;
+            seen[link] = true;
+            var year = yearOf({ alt_name: info }), score = 0;
+            var names = [movie.title, movie.name, movie.original_title, movie.original_name].map(rezkaNormalize).filter(function (v) { return !!v; });
+            var normalized = [rezkaNormalize(name), rezkaNormalize(alternate)];
+            for (var i = 0; i < names.length; i++) {
+                if (normalized.indexOf(names[i]) !== -1) score = Math.max(score, 100);
+                else if (normalized[0].indexOf(names[i]) !== -1) score = Math.max(score, 30);
+            }
+            if (year && yearOf(movie)) score += year === yearOf(movie) ? 20 : -20;
+            result.push({ url: link, title: name, year: year, score: score });
+        }
+        rezkaBlocks(html, 'li', function (a, content) {
+            if (/class=["']enty["']/i.test(content)) { recognized = true; candidate(a, content); }
+        });
+        // Catalog search alternative, accepted as a response shape, not queried as a bypass.
+        var re = /<div\b([^>]*class=["'][^"']*b-content__inline_item-link[^"']*["'][^>]*)>([\s\S]*?)<\/div>/gi, m;
+        while ((m = re.exec(html))) { recognized = true; candidate(rezkaAttrs(m[1]), m[2]); }
+        if (/ничего не найдено|ничего не удалось найти|поиск не дал результатов|no results|b-search__notfound/i.test(rezkaText(html))) recognized = true;
+        return recognized ? { items: result.sort(function (a, b) { return b.score - a.score; }) } : { error: 'parser' };
+    }
+    function rezkaEpisodeData(seasonsHtml, episodesHtml) {
+        var seasons = [], episodes = [], seenS = {}, seenE = {};
+        rezkaBlocks(seasonsHtml, 'li', function (a, inner) {
+            var id = rezkaId(a['data-tab_id']);
+            if (rezkaClass(a, 'b-simple_season__item') && id && !seenS[id]) {
+                seenS[id] = true; seasons.push({ id: id, title: rezkaText(inner) || tr('season') + ' ' + id });
+            }
+        });
+        rezkaBlocks(episodesHtml, 'li', function (a, inner) {
+            var season = rezkaId(a['data-season_id']), episode = rezkaId(a['data-episode_id']), key = season + ':' + episode;
+            if (rezkaClass(a, 'b-simple_episode__item') && season && episode && !seenE[key]) {
+                seenE[key] = true; episodes.push({ season: season, id: episode, title: rezkaText(inner) || tr('episode') + ' ' + episode });
+            }
+        });
+        return { seasons: seasons.sort(function (a, b) { return numberSort(a.id, b.id); }),
+            episodes: episodes.sort(function (a, b) { return numberSort(a.season, b.season) || numberSort(a.id, b.id); }) };
+    }
+    function rezkaDetail(html) {
+        var series = html.match(/\.initCDNSeriesEvents\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,/);
+        var film = html.match(/\.initCDNMoviesEvents\(\s*(\d+)\s*,\s*(\d+)\s*,\s*([01])\s*,\s*([01])\s*,\s*([01])\s*,/);
+        var init = series || film, title = html.match(/<h1\b[^>]*>([\s\S]*?)<\/h1>/i), voices = [], seen = {};
+        if (!init || !rezkaId(init[1]) || !rezkaId(init[2]) || !title || !rezkaText(title[1])) return { error: 'parser' };
+        rezkaBlocks(html, 'li', function (a, inner) {
+            var id = rezkaId(a['data-translator_id']);
+            if (rezkaClass(a, 'b-translator__item') && id && !seen[id]) {
+                seen[id] = true;
+                voices.push({ id: id, title: a.title || rezkaText(inner) || tr('voice'),
+                    camrip: a['data-camrip'] === '1' ? '1' : '0', ads: a['data-ads'] === '1' ? '1' : '0', director: a['data-director'] === '1' ? '1' : '0' });
+            }
+        });
+        if (!voices.length) voices.push({ id: init[2], title: tr('rezka_default_voice'),
+            camrip: film ? film[3] : '0', ads: film ? film[4] : '0', director: film ? film[5] : '0' });
+        var favs = '', input = /<input\b([^>]*)>/gi, m;
+        while ((m = input.exec(html))) {
+            var attrs = rezkaAttrs(m[1]);
+            if (attrs.id === 'ctrl_favs' && /^[a-z0-9_-]{0,256}$/i.test(attrs.value || '')) favs = attrs.value || '';
+        }
+        return { id: init[1], title: rezkaText(title[1]), year: yearOf({ alt_name: rezkaText(title[1]) }),
+            series: !!series, voices: voices, favs: favs };
+    }
+    function rezkaJson(text, stage) {
+        var data;
+        try { data = JSON.parse(text); } catch (ignored) { return { error: 'parser' }; }
+        if (!data || typeof data !== 'object' || Array.isArray(data)) return { error: 'parser' };
+        if (data.premium_content) return { error: 'restricted' };
+        if (data.success === false) return { error: 'rejected' };
+        if (stage === 'episodes') {
+            if (typeof data.seasons !== 'string' || typeof data.episodes !== 'string') return { error: 'parser' };
+            var items = rezkaEpisodeData(data.seasons, data.episodes);
+            return items.seasons.length && items.episodes.length ? items : { error: 'empty' };
+        }
+        if (typeof data.url !== 'string') return { error: 'parser' };
+        if (/^\s*#/.test(data.url)) return { error: 'encoded' };
+        var streams = [], seen = {}, re = /\[([^\]]+)\]([^\[]+)/g, m;
+        function add(label, url) {
+            url = rezkaMediaUrl(url.trim());
+            if (url && !seen[url]) { seen[url] = true; streams.push({ title: label, url: url }); }
+        }
+        while ((m = re.exec(data.url))) {
+            var quality = m[1].trim();
+            if (!/^(?:240|360|480|720|1080|1440|2160)p(?: Ultra)?$/i.test(quality)) continue;
+            m[2].replace(/,\s*$/, '').split(/\s+or\s+/).forEach(function (url) { add(quality, url); });
+        }
+        if (!streams.length && rezkaMediaUrl(data.url.trim())) add(tr('rezka_source_quality'), data.url);
+        return streams.length ? { streams: streams } : { error: 'empty_stream' };
+    }
+
+    // Own request lifecycle; deliberately no native/proxy fallback in the preview.
+    function RezkaNetwork() {
+        var xhr = null, timer = null, generation = 0;
+        this.clear = function () {
+            generation++; clearTimeout(timer); timer = null;
+            var pending = xhr; xhr = null;
+            if (pending && pending.abort) pending.abort();
+        };
+        this.send = function (path, stage, data, parser, complete) {
+            this.clear();
+            var current = generation, done = false, startedAt = clockMs();
+            function finish(text, status, kind) {
+                if (done || current !== generation) return;
+                done = true; clearTimeout(timer); timer = null; xhr = null;
+                status = Number(status);
+                if (!(status >= 100 && status <= 599 && status === Math.floor(status))) status = 0;
+                kind = /^(none|timeout|error|abort)$/.test(kind) ? kind : 'error';
+                var type = typeof text === 'string' && /^\s*[\[{]/.test(text) ? 'json' : (typeof text === 'string' && /<\w/.test(text) ? 'html' : 'unknown');
+                var result = { error: kind === 'none' ? '' : kind };
+                if (status === 401) result.error = 'auth';
+                else if (status === 403 || status === 429) result.error = 'blocked';
+                else if (status === 404) result.error = 'missing';
+                else if (status >= 500) result.error = 'server';
+                else if (kind === 'none' && status >= 200 && status < 300) {
+                    if (typeof text !== 'string' || text.length > 2000000) result.error = 'parser';
+                    else {
+                        var gate = rezkaGate(text);
+                        if (gate) result.error = gate;
+                        else { try { result = parser(text); } catch (ignored) { result = { error: 'parser' }; } }
+                    }
+                } else if (!result.error) result.error = 'error';
+                var elapsed = Number(clockMs() - startedAt);
+                complete(result, { provider: 'rezka', stage: stage, transport: 'WebView AJAX', status: status,
+                    kind: result.error || 'none', elapsed: isFinite(elapsed) ? Math.max(0, Math.min(86400000, Math.round(elapsed))) : 0, type: type });
+            }
+            timer = setTimeout(function () { var pending = xhr; finish(null, 0, 'timeout'); if (pending && pending.abort) pending.abort(); }, 15000);
+            try {
+                var pending = $.ajax({ url: REZKA_ORIGIN + path, type: data ? 'POST' : 'GET', data: data || undefined,
+                    contentType: 'application/x-www-form-urlencoded; charset=UTF-8', dataType: 'text', timeout: 15000,
+                    crossDomain: true, global: false, xhrFields: { withCredentials: false },
+                    success: function (text, ignored, response) { finish(text, response && response.status, 'none'); },
+                    error: function (response, kind) { finish(null, response && response.status, kind); }
+                });
+                if (!done && current === generation) xhr = pending;
+            } catch (ignored) { finish(null, 0, 'error'); }
+        };
+    }
+
+    // Shared only by the two new components; FilmixScreen remains independent.
+    function ProviderPanel(owner, back) {
+        var scroll = new Lampa.Scroll({ mask: true, over: true }), rows = [], last = false, focus = {}, page = '';
+        var alive = false, destroyed = false, started = false, controller;
+        var self = this;
+        function clearRows() { rows.forEach(function (row) { row.off('.zebproviders').remove(); }); rows = []; last = false; }
+        this.active = function () { return alive; };
+        this.loading = function (value) { if (alive && owner.activity) owner.activity.loader(!!value); };
+        this.restore = function () {
+            if (alive && started && Lampa.Controller.enabled().controller === controller) {
+                Lampa.Controller.collectionSet(scroll.render());
+                Lampa.Controller.collectionFocus(last || rows[focus[page]] || rows[0], scroll.render());
+            }
+        };
+        this.draw = function (key, title, subtitle, entries, info) {
+            if (!alive) return;
+            clearRows(); scroll.clear(); scroll.reset(); page = key;
+            var head = $('<div class="lampa-online-head"></div>');
+            head.append($('<div class="lampa-online-title"></div>').text(title));
+            if (subtitle) head.append($('<div class="lampa-online-muted"></div>').text(subtitle));
+            scroll.append(head);
+            if (info) {
+                var box = $('<div class="lampa-online-diagnostic"></div>');
+                ['provider: rezka', 'stage: ' + info.stage, 'transport: ' + info.transport, 'HTTP: ' + info.status,
+                    'error: ' + info.kind, 'elapsed: ' + info.elapsed + ' ms', 'response type: ' + info.type,
+                    tr('rezka_' + info.kind)].forEach(function (line) { box.append($('<div class="lampa-online-diagnostic-line"></div>').text(line)); });
+                scroll.append(box);
+            }
+            [{ title: '← ' + tr('back'), action: back }].concat(entries).forEach(function (entry, index) {
+                var row = $('<div class="lampa-online-row selector"></div>');
+                row.append($('<div class="lampa-online-row-title"></div>').text(entry.title));
+                if (entry.sub) row.append($('<div class="lampa-online-muted"></div>').text(entry.sub));
+                row.on('hover:focus.zebproviders', function () { last = row; focus[page] = index; scroll.update(row, true); });
+                row.on('hover:enter.zebproviders', function () { if (alive && entry.action) entry.action(); });
+                rows.push(row); scroll.append(row);
+            });
+            self.restore();
+        };
+        this.create = function () { if (destroyed || alive) return false; alive = true; return true; };
+        this.start = function () {
+            if (!alive) return;
+            function move(direction) { var nav = Lampa.Navigator || window.Navigator; if (nav && nav.move) nav.move(direction); }
+            controller = { toggle: function () { started = true; self.restore(); }, gone: function () { started = false; },
+                up: function () { move('up'); }, down: function () { move('down'); }, right: function () { move('right'); },
+                left: function () { var nav = Lampa.Navigator || window.Navigator; if (nav && nav.canmove && nav.canmove('left')) move('left'); else Lampa.Controller.toggle('menu'); }, back: back };
+            Lampa.Controller.add('content', controller); Lampa.Controller.toggle('content');
+        };
+        this.stop = function () { started = false; };
+        this.destroy = function () {
+            if (destroyed) return;
+            self.loading(false); alive = false; destroyed = true; started = false; clearRows(); focus = {};
+            if (controller) {
+                if (Lampa.Controller.enabled().controller === controller) Lampa.Controller.clear();
+                Object.keys(controller).forEach(function (key) { delete controller[key]; }); controller.invisible = true;
+            }
+            scroll.destroy();
+        };
+        this.render = function () { return scroll.render(); };
+    }
+    function pushProvider(component, card, provider) {
+        Lampa.Activity.push({ url: '', title: tr('name') + ' · ' + provider, component: component,
+            movie: card, search: titleOf(card), page: 1 });
+    }
+    function ProviderScreen(object) {
+        object = object || {};
+        var movie = object.movie || {}, panel = new ProviderPanel(this, function () { Lampa.Activity.backward(); });
+        this.create = function () {
+            if (panel.create()) {
+                panel.loading(false);
+                panel.draw('providers', tr('name'), titleOf(movie), [
+                    { title: 'Rezka', sub: tr('rezka_experimental'), action: function () { pushProvider(REZKA_COMPONENT, movie, 'Rezka'); } },
+                    { title: 'Filmix', action: function () { pushProvider(COMPONENT, movie, 'Filmix'); } }
+                ]);
+            }
+            return panel.render();
+        };
+        this.start = panel.start; this.stop = panel.stop; this.pause = panel.stop; this.destroy = panel.destroy; this.render = panel.render;
+    }
+    function RezkaScreen(object) {
+        object = object || {};
+        var movie = object.movie || {}, network = new RezkaNetwork(), history = [], current = null;
+        var panel = new ProviderPanel(this, goBack), detail = null, voice = null, chosenEpisode = null;
+        function goBack() {
+            if (!panel.active()) return;
+            network.clear(); panel.loading(false);
+            if (history.length) { current = history.pop(); current(); }
+            else Lampa.Activity.backward();
+        }
+        function navigate(action) { if (current) history.push(current); action(); }
+        function page(key, entries, sub, info) {
+            current = function () { panel.draw(key, tr('name') + ' · Rezka', sub || titleOf(movie), entries, info); };
+            panel.loading(false); current();
+        }
+        function request(stage, path, data, parser, retry, success) {
+            panel.draw('loading-' + stage, tr('name') + ' · Rezka', tr('loading'), []);
+            panel.loading(true);
+            network.send(path, stage, data, parser, function (result, info) {
+                if (!panel.active()) return;
+                if (result.error) {
+                    page('error-' + stage, [{ title: tr('retry'), action: retry }], tr('rezka_experimental'), info);
+                } else success(result, info);
+            });
+        }
+        function search(query) {
+            if (!query) { page('missing', [], tr('missing_title')); return; }
+            request('search', '/engine/ajax/search.php', { q: query }, function (html) { return rezkaSearch(html, movie); }, function () { search(query); }, function (result, info) {
+                var entries = result.items.map(function (item) {
+                    return { title: item.title, sub: item.year, action: function () { navigate(function () { loadDetail(item); }); } };
+                });
+                var alternate = movie.original_title || movie.original_name;
+                if (alternate && rezkaNormalize(alternate) !== rezkaNormalize(query)) entries.push({ title: tr('search') + ': ' + alternate, action: function () { navigate(function () { search(alternate); }); } });
+                if (!result.items.length) { info.kind = 'empty'; page('results', entries.concat([{ title: tr('retry'), action: function () { search(query); } }]), tr('nothing'), info); }
+                else page('results', entries, tr('results') + ' · ' + query);
+            });
+        }
+        function loadDetail(item) {
+            var safe = rezkaDetailUrl(item.url);
+            if (!safe) return;
+            request('detail', safe.slice(REZKA_ORIGIN.length), null, rezkaDetail, function () { loadDetail(item); }, function (result) {
+                detail = result;
+                page('voices', detail.voices.map(function (itemVoice) {
+                    return { title: itemVoice.title, action: function () {
+                        voice = itemVoice;
+                        navigate(function () { if (detail.series) loadEpisodes(); else { chosenEpisode = null; loadStream(); } });
+                    } };
+                }), detail.title + ' · ' + tr('voice'));
+            });
+        }
+        function form(action) { return { id: detail.id, translator_id: voice.id, favs: detail.favs, action: action }; }
+        function loadEpisodes() {
+            request('episodes', '/ajax/get_cdn_series/', form('get_episodes'), function (text) { return rezkaJson(text, 'episodes'); }, loadEpisodes, function (result) {
+                page('seasons', result.seasons.map(function (season) {
+                    return { title: season.title, action: function () { navigate(function () {
+                        page('episodes-' + season.id, result.episodes.filter(function (episode) { return episode.season === season.id; }).map(function (episode) {
+                            return { title: episode.title, sub: tr('episode') + ' ' + episode.id, action: function () { chosenEpisode = episode; navigate(loadStream); } };
+                        }), detail.title + ' · ' + voice.title + ' · ' + season.title);
+                    }); } };
+                }), detail.title + ' · ' + voice.title);
+            });
+        }
+        function loadStream() {
+            var data = form(detail.series ? 'get_stream' : 'get_movie');
+            if (detail.series) { data.season = chosenEpisode.season; data.episode = chosenEpisode.id; }
+            else { data.is_camrip = voice.camrip; data.is_ads = voice.ads; data.is_director = voice.director; }
+            request('stream', '/ajax/get_cdn_series/', data, function (text) { return rezkaJson(text, 'stream'); }, loadStream, function (result) {
+                page('qualities', result.streams.map(function (stream) {
+                    return { title: stream.title, action: function () { play(stream); } };
+                }), detail.title + ' · ' + voice.title + (chosenEpisode ? ' · ' + tr('episode') + ' ' + chosenEpisode.id : ''));
+            });
+        }
+        function play(stream) {
+            if (!rezkaMediaUrl(stream.url)) return;
+            function playerError() {
+                if (!panel.active()) return;
+                Lampa.Noty.show(tr('play_error'));
+                if (panel.active()) {
+                    page('player-error', [{ title: tr('retry'), action: function () { play(stream); } }], detail.title,
+                        { stage: 'stream', transport: 'Lampa.Player', status: 0, kind: 'player', elapsed: 0, type: 'unknown' });
+                    Lampa.Controller.toggle('content');
+                }
+            }
+            var item = { url: stream.url, title: detail.title, movie: movie, voice_name: voice.title, error: playerError };
+            if (chosenEpisode) { item.season = Number(chosenEpisode.season); item.episode = Number(chosenEpisode.id); }
+            try {
+                Lampa.Player.play(item);
+                // No guessed next episode links. This entry is the one fetched above.
+                Lampa.Player.playlist([item]);
+            } catch (ignored) { playerError(); }
+        }
+        this.create = function () { if (panel.create()) search(titleOf(movie) || object.search || ''); return panel.render(); };
+        this.start = panel.start; this.stop = panel.stop; this.pause = panel.stop; this.render = panel.render;
+        this.destroy = function () { network.clear(); history = []; current = null; detail = voice = chosenEpisode = null; panel.destroy(); };
+    }
+
     function openOnline(card) {
         card = card || {};
         Lampa.Activity.push({
-            url: '', title: tr('name'), component: COMPONENT,
+            url: '', title: tr('name'), component: PROVIDERS_COMPONENT,
             movie: card, search: titleOf(card), page: 1
         });
     }
@@ -760,6 +1127,24 @@
 
         Lampa.Lang.add({
             lampa_online_name: { uk: 'ZebMod', ru: 'ZebMod', en: 'ZebMod' },
+            lampa_online_rezka_experimental: { uk: 'Експериментальний адаптер. Живий пошук і відтворення не підтверджені; можливі CORS та захист від ботів.', ru: 'Экспериментальный адаптер. Живой поиск и воспроизведение не подтверждены; возможны CORS и защита от ботов.', en: 'Experimental adapter. Live search and playback unverified; CORS and anti-bot protection may prevent access.' },
+            lampa_online_rezka_default_voice: { uk: 'Озвучення сайту', ru: 'Озвучка сайта', en: 'Site default audio' },
+            lampa_online_rezka_source_quality: { uk: 'Якість джерела', ru: 'Качество источника', en: 'Source quality' },
+            lampa_online_rezka_none: { uk: 'Відповідь розпізнано локальним парсером', ru: 'Ответ распознан локальным парсером', en: 'Response recognized by the local parser' },
+            lampa_online_rezka_blocked: { uk: 'Rezka обмежує доступ або вимагає перевірку на бота. Обхід не підтримується.', ru: 'Rezka ограничивает доступ или требует проверку на бота. Обход не поддерживается.', en: 'Rezka blocks access or requires a human check. Bypass is not supported.' },
+            lampa_online_rezka_auth: { uk: 'Rezka вимагає авторизацію. Підтримується лише гостьовий режим.', ru: 'Rezka требует авторизацию. Поддерживается только гостевой режим.', en: 'Rezka requires sign-in. Only guest mode is supported.' },
+            lampa_online_rezka_restricted: { uk: 'Матеріал має обмеження доступу. Обхід не підтримується.', ru: 'Доступ к материалу ограничен. Обход не поддерживается.', en: 'Access to this content is restricted. Bypass is not supported.' },
+            lampa_online_rezka_parser: { uk: 'Невідомий або пошкоджений формат Rezka; парсер не підтверджено живою відповіддю.', ru: 'Неизвестный или повреждённый формат Rezka; парсер не подтверждён живым ответом.', en: 'Unknown or malformed Rezka format; parser unverified against live content.' },
+            lampa_online_rezka_empty: { uk: 'Розпізнана відповідь не містить результатів або серій.', ru: 'Распознанный ответ не содержит результатов или серий.', en: 'Recognized response has no results or episodes.' },
+            lampa_online_rezka_empty_stream: { uk: 'Немає підтримуваного HTTPS MP4/HLS потоку.', ru: 'Нет поддерживаемого HTTPS MP4/HLS потока.', en: 'No supported HTTPS MP4/HLS stream.' },
+            lampa_online_rezka_encoded: { uk: 'Закодовані посилання не підтримуються цим експериментальним адаптером.', ru: 'Закодированные ссылки не поддерживаются этим экспериментальным адаптером.', en: 'Encoded links are unsupported by this experimental adapter.' },
+            lampa_online_rezka_rejected: { uk: 'Rezka відхилила гостьовий запит. Причину не підтверджено.', ru: 'Rezka отклонила гостевой запрос. Причина не подтверждена.', en: 'Rezka rejected the guest request. Cause unconfirmed.' },
+            lampa_online_rezka_error: { uk: 'Причину не визначено: можливі мережа, DNS, TLS або CORS. HTTP 0 не є відповіддю сервера.', ru: 'Причина не определена: возможны сеть, DNS, TLS или CORS. HTTP 0 не является ответом сервера.', en: 'Cause unknown: network, DNS, TLS or CORS. HTTP 0 is not a server response.' },
+            lampa_online_rezka_timeout: { uk: 'Rezka не відповіла вчасно.', ru: 'Rezka не ответила вовремя.', en: 'Rezka request timed out.' },
+            lampa_online_rezka_abort: { uk: 'Запит скасовано.', ru: 'Запрос отменён.', en: 'Request cancelled.' },
+            lampa_online_rezka_missing: { uk: 'Сторінка або endpoint не знайдені (404).', ru: 'Страница или endpoint не найдены (404).', en: 'Page or endpoint not found (404).' },
+            lampa_online_rezka_server: { uk: 'Помилка сервера Rezka (5xx).', ru: 'Ошибка сервера Rezka (5xx).', en: 'Rezka server error (5xx).' },
+            lampa_online_rezka_player: { uk: 'Помилка запуску Lampa.Player.', ru: 'Ошибка запуска Lampa.Player.', en: 'Lampa.Player launch error.' },
             lampa_online_watch: { uk: 'Дивитися через ZebMod', ru: 'Смотреть через ZebMod', en: 'Watch via ZebMod' },
             lampa_online_search: { uk: 'Пошук', ru: 'Поиск', en: 'Search' },
             lampa_online_results: { uk: 'Результати пошуку', ru: 'Результаты поиска', en: 'Search results' },
@@ -812,10 +1197,12 @@
         $('body').append(Lampa.Template.get(PREFIX + 'style', {}, true));
 
         if (!Lampa.Component.get(COMPONENT)) Lampa.Component.add(COMPONENT, FilmixScreen);
+        if (!Lampa.Component.get(PROVIDERS_COMPONENT)) Lampa.Component.add(PROVIDERS_COMPONENT, ProviderScreen);
+        if (!Lampa.Component.get(REZKA_COMPONENT)) Lampa.Component.add(REZKA_COMPONENT, RezkaScreen);
         Lampa.Manifest.plugins = {
-            type: 'video', version: '0.1.4', name: 'ZebMod',
-            description: 'Filmix: онлайн-пошук та відтворення', component: COMPONENT,
-            onContextMenu: function () { return { name: tr('watch'), description: 'Filmix (beta)' }; },
+            type: 'video', version: '0.1.5', name: 'ZebMod',
+            description: 'Rezka (experimental), Filmix', component: PROVIDERS_COMPONENT,
+            onContextMenu: function () { return { name: tr('watch'), description: 'Rezka (experimental), Filmix' }; },
             onContextLauch: openOnline
         };
         Lampa.Listener.follow('full', addFullSource);
@@ -845,7 +1232,7 @@
             field: { name: 'Filmix device ID', description: 'Сталий ідентифікатор пристрою; для наявного токена збережи відповідний ID' }
         });
         renameInstalledExtension();
-        log('v0.1.4.ready');
+        log('v0.1.5.ready');
     }
 
     function bootstrap() {
